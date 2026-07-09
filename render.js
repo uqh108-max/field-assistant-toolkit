@@ -672,7 +672,10 @@
     var v = this.derive();
     // capture focus + caret + scroll before replacing DOM
     var active = document.activeElement;
-    var akey = (active && active.dataset) ? active.dataset.key : null;
+    // Only restore focus for text-entry fields. Re-focusing a <select> after a
+    // change re-renders leaves the native picker looking stuck/active, so skip it.
+    var focusable = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA');
+    var akey = (focusable && active.dataset) ? active.dataset.key : null;
     var aStart = null, aEnd = null;
     try { if (active && 'selectionStart' in active) { aStart = active.selectionStart; aEnd = active.selectionEnd; } } catch (e) {}
     var scrollTop = this.$screen ? this.$screen.scrollTop : 0;

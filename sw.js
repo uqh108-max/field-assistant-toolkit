@@ -1,5 +1,5 @@
 /* Field Assistant service worker — offline-first for the app shell. */
-var CACHE = 'field-assistant-v2';
+var CACHE = 'field-assistant-v3';
 var CORE = [
   './',
   'index.html',
@@ -41,17 +41,19 @@ self.addEventListener('fetch', function (e) {
     return;
   }
 
-  // Same-origin: cache-first, fall back to network, then to cached index for navigations.
+  // Same-origin: stale-while-revalidate — serve cache instantly (fast + offline),
+  // refresh it in the background so a code/data push lands on the next reload.
   if (url.origin === self.location.origin) {
     e.respondWith(
-      caches.match(req).then(function (cached) {
-        if (cached) return cached;
-        return fetch(req).then(function (res) {
-          var copy = res.clone();
-          caches.open(CACHE).then(function (c) { try { c.put(req, copy); } catch (x) {} });
-          return res;
-        }).catch(function () {
-          if (req.mode === 'navigate') return caches.match('index.html');
+      caches.open(CACHE).then(function (cache) {
+        return cache.match(req).then(function (cached) {
+          var net = fetch(req).then(function (res) {
+            try { cache.put(req, res.clone()); } catch (x) {}
+            return res;
+          }).catch(function () {
+            return cached || (req.mode === 'navigate' ? cache.match('index.html') : undefined);
+          });
+          return cached || net;
         });
       })
     );
