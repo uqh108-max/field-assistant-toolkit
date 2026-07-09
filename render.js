@@ -241,13 +241,26 @@
     var trigger = '<button data-act="' + o.toggleAct + '" style="width:100%;background:#FFF;border:1px solid ' + (o.open ? '#0C8577' : '#D8D2C4') + ';border-radius:12px;padding:13px 12px;font-size:14px;font-weight:600;color:' + (o.hasSelection ? '#16211F' : '#6B776F') + ';cursor:pointer;display:flex;align-items:center;justify-content:space-between;text-align:left;">' +
       '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(o.selectedLabel) + '</span>' + chev + '</button>';
     if (!o.open) return '<div data-combo="' + o.name + '">' + trigger + '</div>';
-    // Absolute overlay: floats below the trigger over the content beneath, so
-    // opening/closing never changes the wrapper height (zero page shift).
-    var panel = '<div style="position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:50;background:#FFF;border:1px solid #D8D2C4;border-radius:12px;overflow:hidden;box-shadow:0 14px 34px rgba(0,0,0,0.18);">' +
-      '<div style="padding:8px;border-bottom:1px solid #EFEBE2;"><div style="position:relative;">' +
-        '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#94A099" stroke-width="2" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>' +
-        '<input data-set="' + o.setKey + '" data-key="' + o.setKey + '" value="' + esc(o.query) + '" placeholder="' + esc(o.searchPlaceholder) + '" style="width:100%;background:#FBF9F4;border:1px solid #E2DDD0;border-radius:9px;padding:9px 9px 9px 32px;font-size:14px;font-weight:500;"></div></div>' +
-      // fixed-height list so the panel never grows/shrinks as results filter
+
+    // 16px font on the input stops iOS zooming in on focus.
+    var searchBox = '<div style="padding:8px;border-bottom:1px solid #EFEBE2;flex-shrink:0;"><div style="position:relative;">' +
+      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#94A099" stroke-width="2" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>' +
+      '<input data-set="' + o.setKey + '" data-key="' + o.setKey + '" value="' + esc(o.query) + '" placeholder="' + esc(o.searchPlaceholder) + '" style="width:100%;background:#FBF9F4;border:1px solid #E2DDD0;border-radius:9px;padding:10px 9px 10px 32px;font-size:16px;font-weight:500;"></div></div>';
+
+    if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) {
+      // Mobile: fixed top sheet + dimmed backdrop, so the search box and list stay
+      // pinned to the top of the screen above the keyboard. sizeMobileSheet() trims
+      // it to the visible viewport once the keyboard is up.
+      var backdrop = '<div data-act="closePickers" style="position:fixed;inset:0;z-index:999;background:rgba(20,25,23,0.35);"></div>';
+      var sheet = '<div data-combo-sheet="' + o.name + '" style="position:fixed;top:calc(env(safe-area-inset-top, 0px) + 8px);left:8px;right:8px;z-index:1000;display:flex;flex-direction:column;max-height:calc(100dvh - 16px);background:#FFF;border:1px solid #D8D2C4;border-radius:14px;overflow:hidden;box-shadow:0 18px 44px rgba(0,0,0,0.30);">' +
+        searchBox +
+        '<div data-combo-list="' + o.name + '" style="flex:1 1 auto;overflow-y:auto;-webkit-overflow-scrolling:touch;">' + comboRowsHtml(o) + '</div></div>';
+      return '<div data-combo="' + o.name + '">' + trigger + backdrop + sheet + '</div>';
+    }
+
+    // Desktop: absolute overlay floating below the trigger (zero page shift).
+    var panel = '<div style="position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:50;display:flex;flex-direction:column;background:#FFF;border:1px solid #D8D2C4;border-radius:12px;overflow:hidden;box-shadow:0 14px 34px rgba(0,0,0,0.18);">' +
+      searchBox +
       '<div data-combo-list="' + o.name + '" style="height:240px;overflow-y:auto;-webkit-overflow-scrolling:touch;">' + comboRowsHtml(o) + '</div></div>';
     return '<div data-combo="' + o.name + '" style="position:relative;">' + trigger + panel + '</div>';
   }
@@ -735,6 +748,12 @@
         self.state.productPickerOpen = false; self.state.calcPumpPickerOpen = false; self.state.jarProductPickerOpen = false; self.render();
       }
     }, true);
+    // keep the mobile picker sheet fitted above the on-screen keyboard as it opens/closes
+    if (window.visualViewport) {
+      var onVV = function () { if (self.state.productPickerOpen || self.state.calcPumpPickerOpen || self.state.jarProductPickerOpen) self.sizeMobileSheet(); };
+      window.visualViewport.addEventListener('resize', onVV);
+      window.visualViewport.addEventListener('scroll', onVV);
+    }
     this.render();
   };
   App.setState_change = function (key, val) { var p = {}; p[key] = val; this.setState(p); };
@@ -749,6 +768,18 @@
     else return;
     var el = this.$screen.querySelector('[data-combo-list="' + name + '"]');
     if (el) el.innerHTML = comboRowsHtml(cfg);
+  };
+
+  // Mobile: trim the fixed top-sheet to the visible viewport (above the keyboard),
+  // and keep it pinned to the top of the visible area if iOS scrolls the layout.
+  App.sizeMobileSheet = function () {
+    var sheet = document.querySelector('[data-combo-sheet]');
+    if (!sheet) return;
+    var vv = window.visualViewport;
+    if (vv) {
+      sheet.style.top = (vv.offsetTop + 8) + 'px';
+      sheet.style.maxHeight = (vv.height - 16) + 'px';
+    }
   };
 
   App.render = function () {
@@ -790,16 +821,13 @@
     if (App._focusKey) {
       var fk = this.$screen.querySelector('[data-key="' + (window.CSS && CSS.escape ? CSS.escape(App._focusKey) : App._focusKey) + '"]');
       if (fk) {
-        var wrap = fk.closest('[data-combo]');
-        if (wrap && this.$screen) {
-          var wr = wrap.getBoundingClientRect(), scr = this.$screen.getBoundingClientRect();
-          var coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
-          if (coarse) {
-            // mobile: lift the trigger to the top so the whole list sits ABOVE the
-            // on-screen keyboard (which covers the lower ~half of the screen)
-            this.$screen.scrollTop += (wr.top - scr.top) - 10;
-          } else {
-            // desktop (no keyboard): scroll only enough to reveal the whole panel
+        var coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+        if (coarse) {
+          this.sizeMobileSheet();  // fixed top-sheet: fit it to the space above the keyboard
+        } else {
+          var wrap = fk.closest('[data-combo]');
+          if (wrap && this.$screen) {
+            var wr = wrap.getBoundingClientRect(), scr = this.$screen.getBoundingClientRect();
             var overflow = (wr.bottom + 312) - scr.bottom; // panel ≈ 306px below the trigger
             if (overflow > 0) this.$screen.scrollTop += overflow + 14;
           }

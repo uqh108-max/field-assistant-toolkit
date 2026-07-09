@@ -39,6 +39,11 @@
   <script src="render.js"></script>
   <script>
     if ('serviceWorker' in navigator) {
+      // when a new version activates, reload once so a single refresh always updates
+      var __reloading = false;
+      navigator.serviceWorker.addEventListener('controllerchange', function () {
+        if (__reloading) return; __reloading = true; window.location.reload();
+      });
       window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
     }
   </script>
