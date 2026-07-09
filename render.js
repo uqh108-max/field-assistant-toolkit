@@ -793,11 +793,18 @@
         var wrap = fk.closest('[data-combo]');
         if (wrap && this.$screen) {
           var wr = wrap.getBoundingClientRect(), scr = this.$screen.getBoundingClientRect();
-          var overflow = (wr.bottom + 312) - scr.bottom; // panel ≈ 306px below the trigger
-          if (overflow > 0) this.$screen.scrollTop += overflow + 14;
+          var coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+          if (coarse) {
+            // mobile: lift the trigger to the top so the whole list sits ABOVE the
+            // on-screen keyboard (which covers the lower ~half of the screen)
+            this.$screen.scrollTop += (wr.top - scr.top) - 10;
+          } else {
+            // desktop (no keyboard): scroll only enough to reveal the whole panel
+            var overflow = (wr.bottom + 312) - scr.bottom; // panel ≈ 306px below the trigger
+            if (overflow > 0) this.$screen.scrollTop += overflow + 14;
+          }
         }
-        // no preventScroll here: let mobile browsers lift the search box above the
-        // on-screen keyboard (the manual scroll above already positions it on desktop)
+        // no preventScroll: let mobile browsers keep the search box above the keyboard
         try { fk.focus(); } catch (e3) {}
       }
       App._focusKey = null;
