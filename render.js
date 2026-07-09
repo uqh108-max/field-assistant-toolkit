@@ -241,13 +241,15 @@
     var trigger = '<button data-act="' + o.toggleAct + '" style="width:100%;background:#FFF;border:1px solid ' + (o.open ? '#0C8577' : '#D8D2C4') + ';border-radius:12px;padding:13px 12px;font-size:14px;font-weight:600;color:' + (o.hasSelection ? '#16211F' : '#6B776F') + ';cursor:pointer;display:flex;align-items:center;justify-content:space-between;text-align:left;">' +
       '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(o.selectedLabel) + '</span>' + chev + '</button>';
     if (!o.open) return '<div data-combo="' + o.name + '">' + trigger + '</div>';
-    var panel = '<div style="margin-top:7px;background:#FFF;border:1px solid #D8D2C4;border-radius:12px;overflow:hidden;box-shadow:0 10px 26px rgba(0,0,0,0.10);">' +
+    // Absolute overlay: floats below the trigger over the content beneath, so
+    // opening/closing never changes the wrapper height (zero page shift).
+    var panel = '<div style="position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:50;background:#FFF;border:1px solid #D8D2C4;border-radius:12px;overflow:hidden;box-shadow:0 14px 34px rgba(0,0,0,0.18);">' +
       '<div style="padding:8px;border-bottom:1px solid #EFEBE2;"><div style="position:relative;">' +
         '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#94A099" stroke-width="2" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>' +
         '<input data-set="' + o.setKey + '" data-key="' + o.setKey + '" value="' + esc(o.query) + '" placeholder="' + esc(o.searchPlaceholder) + '" style="width:100%;background:#FBF9F4;border:1px solid #E2DDD0;border-radius:9px;padding:9px 9px 9px 32px;font-size:14px;font-weight:500;"></div></div>' +
-      // fixed-height list so the panel never grows/shrinks (and jolts the page) as results filter
+      // fixed-height list so the panel never grows/shrinks as results filter
       '<div data-combo-list="' + o.name + '" style="height:240px;overflow-y:auto;-webkit-overflow-scrolling:touch;">' + comboRowsHtml(o) + '</div></div>';
-    return '<div data-combo="' + o.name + '">' + trigger + panel + '</div>';
+    return '<div data-combo="' + o.name + '" style="position:relative;">' + trigger + panel + '</div>';
   }
   // Just the option rows — rebuilt on its own as the user types (no full re-render).
   function comboRowsHtml(o) {
