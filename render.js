@@ -200,6 +200,9 @@
       calcPumpPickerOpen: s.calcPumpPickerOpen, calcPumpPickerQuery: s.calcPumpPickerQuery,
       selectedCalcPumpLabel: (function () { var pp = allPumps.find(function (x) { return x.id === s.selectedCalcPumpId; }); return pp ? (pp.model + ' — ' + pp.maxFlow) : '— select a pump —'; })(),
       filteredCalcPumps: (function () { var qq = (s.calcPumpPickerQuery || '').trim().toLowerCase(); return allPumps.filter(function (p) { return !qq || (p.model + ' ' + p.brand + ' ' + p.type).toLowerCase().indexOf(qq) >= 0; }); })(),
+      jarProductPickerOpen: s.jarProductPickerOpen, jarProductPickerQuery: s.jarProductPickerQuery,
+      selectedJarProductLabel: (allProducts.find(function (p) { return p.id === s.jarProductId; }) || {}).name || '— select a product —',
+      filteredJarProducts: (function () { var qq = (s.jarProductPickerQuery || '').trim().toLowerCase(); return allProducts.filter(function (p) { return !qq || (p.name + ' ' + p.brand + ' ' + p.type + ' ' + p.charge + ' ' + (p.subtitle || '')).toLowerCase().indexOf(qq) >= 0; }); })(),
       showFlowConv: s.flowUnit !== 'm3h' && isFinite(parseFloat(s.flow)),
       flowConverted: this.fmt(parseFloat(s.flow) * this.flowFactor(s.flowUnit), 3),
       showSludgeConv: s.sludgeFlowUnit !== 'm3h' && isFinite(parseFloat(s.sludgeFlow)),
@@ -582,7 +585,13 @@
       '<div style="font-size:13px;color:#6B776F;line-height:1.5;">Dose a set of jars with increasing amounts of stock solution, record how each performs, then carry the winning dose straight into the calculator.</div>' +
       '<div style="margin-top:15px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
         '<div style="font-size:12.5px;font-weight:700;color:#4B564F;margin-bottom:8px;">Product for this test</div>' +
-        '<select data-actchange="onSelectJarProduct" data-key="jarProductId" style="width:100%;background:#FBF9F4;border:1px solid #D8D2C4;border-radius:12px;padding:13px 12px;font-size:14px;font-weight:600;color:#16211F;appearance:none;">' + prodOpts + '</select>' + stockBlock + '</div>' +
+        comboHtml({
+          name: 'jarProduct', open: v.jarProductPickerOpen, query: v.jarProductPickerQuery, setKey: 'jarProductPickerQuery',
+          toggleAct: 'toggleJarProductPicker', pickAct: 'pickJarProduct',
+          selectedLabel: v.selectedJarProductLabel, hasSelection: !!s.jarProductId,
+          includeNone: true, noneLabel: '— select a product —', searchPlaceholder: 'Search product, brand or charge…',
+          items: v.filteredJarProducts.map(function (p) { return { id: p.id, label: p.name, sub: p.subtitle, tag: p.tag, tint: p.tint, tintText: p.tintText, selected: p.id === s.jarProductId }; })
+        }) + stockBlock + '</div>' +
       '<div style="margin-top:12px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
         '<div style="font-size:12.5px;font-weight:700;color:#4B564F;margin-bottom:10px;">Test setup</div>' +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">' +
@@ -709,8 +718,8 @@
     });
     // click-away: tapping outside an open combobox closes it (capture, pre-render)
     frame.addEventListener('pointerdown', function (e) {
-      if ((self.state.productPickerOpen || self.state.calcPumpPickerOpen) && !e.target.closest('[data-combo]')) {
-        self.state.productPickerOpen = false; self.state.calcPumpPickerOpen = false; self.render();
+      if ((self.state.productPickerOpen || self.state.calcPumpPickerOpen || self.state.jarProductPickerOpen) && !e.target.closest('[data-combo]')) {
+        self.state.productPickerOpen = false; self.state.calcPumpPickerOpen = false; self.state.jarProductPickerOpen = false; self.render();
       }
     }, true);
     this.render();

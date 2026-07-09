@@ -39,6 +39,7 @@
       pumpSource: 'manual', selectedCalcPumpId: '',
       productPickerOpen: false, productPickerQuery: '',
       calcPumpPickerOpen: false, calcPumpPickerQuery: '',
+      jarProductPickerOpen: false, jarProductPickerQuery: '',
       jarVol: '1000', stockPct: '0.1', jarProductId: '',
       productQuery: '', productFilter: 'all',
       jars: [
@@ -296,7 +297,17 @@
         calcPumpPickerOpen: false, calcPumpPickerQuery: ''
       });
     },
-    closePickers: function () { App.setState({ productPickerOpen: false, calcPumpPickerOpen: false }); },
+    closePickers: function () { App.setState({ productPickerOpen: false, calcPumpPickerOpen: false, jarProductPickerOpen: false }); },
+    toggleJarProductPicker: function () {
+      var open = !App.state.jarProductPickerOpen;
+      App._focusKey = open ? 'jarProductPickerQuery' : null;
+      App.setState({ jarProductPickerOpen: open, jarProductPickerQuery: '' });
+    },
+    pickJarProduct: function (el) {
+      var id = el.dataset.id;
+      var p = App.allProducts().find(function (x) { return x.id === id; });
+      App.setState({ jarProductId: id, stockPct: p ? '0.1' : App.state.stockPct, jarProductPickerOpen: false, jarProductPickerQuery: '' });
+    },
     onFormLiquid: function () { App.setState({ form: 'liquid' }); },
     onFormPowder: function () { App.setState({ form: 'powder' }); },
     onSelectProduct: function (el) {
