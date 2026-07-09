@@ -225,7 +225,6 @@
         screen: 'calc', calcProductId: p.id,
         form: (p.form === 'Powder') ? 'powder' : 'liquid',
         density: p.density ? String(p.density) : App.state.density,
-        calcMode: (p.doseUnit && p.doseUnit.indexOf('dry solids') >= 0) ? 'sludge' : 'conc',
         productId: null
       });
     },
@@ -270,8 +269,9 @@
       App.setState({
         calcProductId: el.value,
         form: p ? (p.form === 'Powder' ? 'powder' : 'liquid') : App.state.form,
-        density: (p && p.density) ? String(p.density) : App.state.density,
-        calcMode: (p && p.doseUnit && p.doseUnit.indexOf('dry solids') >= 0) ? 'sludge' : (p ? 'conc' : App.state.calcMode)
+        density: (p && p.density) ? String(p.density) : App.state.density
+        // note: product selection no longer changes the calc mode — the user's
+        // Concentration/Sludge tab choice is left untouched.
       });
     },
     onPumpSelect: function () { App.setState({ pumpSource: 'select' }); },
