@@ -241,6 +241,16 @@
     var trigger = '<button data-act="' + o.toggleAct + '" style="width:100%;background:#FFF;border:1px solid ' + (o.open ? '#0C8577' : '#D8D2C4') + ';border-radius:12px;padding:13px 12px;font-size:14px;font-weight:600;color:' + (o.hasSelection ? '#16211F' : '#6B776F') + ';cursor:pointer;display:flex;align-items:center;justify-content:space-between;text-align:left;">' +
       '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(o.selectedLabel) + '</span>' + chev + '</button>';
     if (!o.open) return '<div data-combo="' + o.name + '">' + trigger + '</div>';
+    var panel = '<div style="margin-top:7px;background:#FFF;border:1px solid #D8D2C4;border-radius:12px;overflow:hidden;box-shadow:0 10px 26px rgba(0,0,0,0.10);">' +
+      '<div style="padding:8px;border-bottom:1px solid #EFEBE2;"><div style="position:relative;">' +
+        '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#94A099" stroke-width="2" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>' +
+        '<input data-set="' + o.setKey + '" data-key="' + o.setKey + '" value="' + esc(o.query) + '" placeholder="' + esc(o.searchPlaceholder) + '" style="width:100%;background:#FBF9F4;border:1px solid #E2DDD0;border-radius:9px;padding:9px 9px 9px 32px;font-size:14px;font-weight:500;"></div></div>' +
+      // fixed-height list so the panel never grows/shrinks (and jolts the page) as results filter
+      '<div data-combo-list="' + o.name + '" style="height:240px;overflow-y:auto;-webkit-overflow-scrolling:touch;">' + comboRowsHtml(o) + '</div></div>';
+    return '<div data-combo="' + o.name + '">' + trigger + panel + '</div>';
+  }
+  // Just the option rows — rebuilt on its own as the user types (no full re-render).
+  function comboRowsHtml(o) {
     var rows = '';
     if (o.includeNone) rows += '<button data-act="' + o.pickAct + '" data-id="" style="width:100%;text-align:left;background:#FFF;border:none;border-bottom:1px solid #F0EDE4;padding:11px 12px;cursor:pointer;font-size:14px;font-weight:600;color:#6B776F;">' + esc(o.noneLabel) + '</button>';
     if (o.items.length) {
@@ -253,12 +263,7 @@
     } else {
       rows += '<div style="padding:16px 12px;font-size:13px;color:#94A099;text-align:center;line-height:1.5;">No match for “' + esc(o.query) + '”.</div>';
     }
-    var panel = '<div style="margin-top:7px;background:#FFF;border:1px solid #D8D2C4;border-radius:12px;overflow:hidden;box-shadow:0 10px 26px rgba(0,0,0,0.10);">' +
-      '<div style="padding:8px;border-bottom:1px solid #EFEBE2;"><div style="position:relative;">' +
-        '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#94A099" stroke-width="2" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>' +
-        '<input data-set="' + o.setKey + '" data-key="' + o.setKey + '" value="' + esc(o.query) + '" placeholder="' + esc(o.searchPlaceholder) + '" style="width:100%;background:#FBF9F4;border:1px solid #E2DDD0;border-radius:9px;padding:9px 9px 9px 32px;font-size:14px;font-weight:500;"></div></div>' +
-      '<div style="max-height:246px;overflow-y:auto;-webkit-overflow-scrolling:touch;">' + rows + '</div></div>';
-    return '<div data-combo="' + o.name + '">' + trigger + panel + '</div>';
+    return rows;
   }
 
   // ============================ SCREENS =====================================
@@ -707,7 +712,13 @@
     frame.addEventListener('input', function (e) {
       var el = e.target;
       if (el.tagName === 'SELECT') return;
-      if (el.dataset.set != null) { self.state[el.dataset.set] = el.value; self.render(); }
+      if (el.dataset.set != null) {
+        self.state[el.dataset.set] = el.value;
+        // search boxes update only their own option list — no full-screen re-render (smooth typing)
+        var comboName = { productPickerQuery: 'product', calcPumpPickerQuery: 'pump', jarProductPickerQuery: 'jarProduct' }[el.dataset.set];
+        if (comboName) self.updateComboList(comboName);
+        else self.render();
+      }
       else if (el.dataset.actinput) { var fn = App.H[el.dataset.actinput]; if (fn) fn(el, e); }
     });
     frame.addEventListener('change', function (e) {
@@ -725,6 +736,18 @@
     this.render();
   };
   App.setState_change = function (key, val) { var p = {}; p[key] = val; this.setState(p); };
+
+  // Rebuild only the open combobox's option list as the user types (keeps the
+  // search input, its caret, and the rest of the screen perfectly still).
+  App.updateComboList = function (name) {
+    var v = this.derive(), s = this.state, cfg;
+    if (name === 'product') cfg = { pickAct: 'pickProduct', includeNone: true, noneLabel: '— none / generic —', query: v.productPickerQuery, items: v.filteredProducts.map(function (p) { return { id: p.id, label: p.name, sub: p.subtitle, tag: p.tag, tint: p.tint, tintText: p.tintText, selected: p.id === s.calcProductId }; }) };
+    else if (name === 'pump') cfg = { pickAct: 'pickCalcPump', includeNone: true, noneLabel: '— select a pump —', query: v.calcPumpPickerQuery, items: v.filteredCalcPumps.map(function (p) { return { id: p.id, label: p.model + ' — ' + p.maxFlow, sub: p.brand + ' · ' + p.type, tag: p.tag, tint: p.tint, tintText: p.tintText, selected: p.id === s.selectedCalcPumpId }; }) };
+    else if (name === 'jarProduct') cfg = { pickAct: 'pickJarProduct', includeNone: true, noneLabel: '— select a product —', query: v.jarProductPickerQuery, items: v.filteredJarProducts.map(function (p) { return { id: p.id, label: p.name, sub: p.subtitle, tag: p.tag, tint: p.tint, tintText: p.tintText, selected: p.id === s.jarProductId }; }) };
+    else return;
+    var el = this.$screen.querySelector('[data-combo-list="' + name + '"]');
+    if (el) el.innerHTML = comboRowsHtml(cfg);
+  };
 
   App.render = function () {
     var v = this.derive();
