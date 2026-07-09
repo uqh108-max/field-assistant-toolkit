@@ -1,0 +1,7 @@
+# working / build artefacts — not part of the deployed app
+build/
+*.log
+*.pid
+.DS_Store
+Thumbs.db
+.claude/

@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en-AU">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+  <title>Field Assistant — Treatment Toolkit</title>
+  <meta name="description" content="Water-treatment field dosing assistant: product library, dosing &amp; feed-rate calculator, jar testing and pump specs. Works offline.">
+  <meta name="theme-color" content="#EEEAE1">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Field Assistant">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    html, body { background: #2A2B28; }
+    body { font-family: 'Hanken Grotesk', system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color: #16211F; }
+    a { color: #0C8577; text-decoration: none; }
+    a:hover { color: #0A6E62; }
+    input, select, textarea, button { font-family: inherit; }
+    input:focus, textarea:focus, select:focus { outline: none; border-color: #0C8577 !important; }
+    ::placeholder { color: #A8ADA6; }
+    .scroll::-webkit-scrollbar { width: 0; height: 0; }
+    @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div id="fa-frame" style="max-width:440px;height:100dvh;margin:0 auto;background:#EEEAE1;display:flex;flex-direction:column;position:relative;overflow:hidden;box-shadow:0 0 60px rgba(0,0,0,0.3);">
+    <div id="fa-screen" class="scroll" style="flex:1;overflow-y:auto;overflow-x:hidden;"></div>
+    <div id="fa-nav" style="flex-shrink:0;background:#16211F;display:flex;padding:8px 6px calc(8px + env(safe-area-inset-bottom));gap:2px;"></div>
+  </div>
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+  <script src="render.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
+    }
+  </script>
+</body>
+</html>
