@@ -784,10 +784,22 @@
         if (aStart != null && el.setSelectionRange) { try { el.setSelectionRange(aStart, aEnd); } catch (e2) {} }
       }
     }
-    // one-shot: focus a field (e.g. a combobox search input) right after it opens
+    // one-shot: when a combobox opens, scroll its panel fully into view (the pump
+    // picker sits low on the page) THEN focus the search box, so you can see what
+    // you type. preventScroll on focus keeps the browser from undoing our scroll.
     if (App._focusKey) {
       var fk = this.$screen.querySelector('[data-key="' + (window.CSS && CSS.escape ? CSS.escape(App._focusKey) : App._focusKey) + '"]');
-      if (fk) { try { fk.focus({ preventScroll: true }); } catch (e3) {} }
+      if (fk) {
+        var wrap = fk.closest('[data-combo]');
+        if (wrap && this.$screen) {
+          var wr = wrap.getBoundingClientRect(), scr = this.$screen.getBoundingClientRect();
+          var overflow = (wr.bottom + 312) - scr.bottom; // panel ≈ 306px below the trigger
+          if (overflow > 0) this.$screen.scrollTop += overflow + 14;
+        }
+        // no preventScroll here: let mobile browsers lift the search box above the
+        // on-screen keyboard (the manual scroll above already positions it on desktop)
+        try { fk.focus(); } catch (e3) {}
+      }
       App._focusKey = null;
     }
   };
