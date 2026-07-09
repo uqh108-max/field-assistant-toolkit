@@ -37,6 +37,8 @@
       sludgeFlow: '12', ds: '2.5', doseKg: '6', sludgeDensity: '1.0',
       makedown: '0.5', density: '1.0', pumpMax: '20',
       pumpSource: 'manual', selectedCalcPumpId: '',
+      productPickerOpen: false, productPickerQuery: '',
+      calcPumpPickerOpen: false, calcPumpPickerQuery: '',
       jarVol: '1000', stockPct: '0.1', jarProductId: '',
       productQuery: '', productFilter: 'all',
       jars: [
@@ -262,6 +264,39 @@
     // calc
     onModeConc: function () { App.setState({ calcMode: 'conc' }); },
     onModeSludge: function () { App.setState({ calcMode: 'sludge' }); },
+
+    // searchable product / pump pickers (Dose page)
+    toggleProductPicker: function () {
+      var open = !App.state.productPickerOpen;
+      App._focusKey = open ? 'productPickerQuery' : null;
+      App.setState({ productPickerOpen: open, calcPumpPickerOpen: false, productPickerQuery: '' });
+    },
+    pickProduct: function (el) {
+      var id = el.dataset.id;
+      var p = App.allProducts().find(function (x) { return x.id === id; });
+      App.setState({
+        calcProductId: id,
+        form: p ? (p.form === 'Powder' ? 'powder' : 'liquid') : App.state.form,
+        density: (p && p.density) ? String(p.density) : App.state.density,
+        productPickerOpen: false, productPickerQuery: ''
+      });
+    },
+    toggleCalcPumpPicker: function () {
+      var open = !App.state.calcPumpPickerOpen;
+      App._focusKey = open ? 'calcPumpPickerQuery' : null;
+      App.setState({ calcPumpPickerOpen: open, productPickerOpen: false, calcPumpPickerQuery: '' });
+    },
+    pickCalcPump: function (el) {
+      var id = el.dataset.id;
+      var p = App.allPumps().find(function (x) { return x.id === id; });
+      var vf = p ? App.parsePumpFlow(p.maxFlow) : NaN;
+      App.setState({
+        selectedCalcPumpId: id,
+        pumpMax: (p && isFinite(vf)) ? String(Math.round(vf * 100) / 100) : App.state.pumpMax,
+        calcPumpPickerOpen: false, calcPumpPickerQuery: ''
+      });
+    },
+    closePickers: function () { App.setState({ productPickerOpen: false, calcPumpPickerOpen: false }); },
     onFormLiquid: function () { App.setState({ form: 'liquid' }); },
     onFormPowder: function () { App.setState({ form: 'powder' }); },
     onSelectProduct: function (el) {

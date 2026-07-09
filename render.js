@@ -194,6 +194,12 @@
       noPumpMatch: pumpRows.length === 0 && s.pumpQuery.trim().length > 0 && !s.pumpLoading,
       calc: calc, cal: cal,
       calcPumpChosen: !!s.selectedCalcPumpId, calcPumpInfo: calcPumpInfo,
+      productPickerOpen: s.productPickerOpen, productPickerQuery: s.productPickerQuery,
+      selectedProductLabel: (allProducts.find(function (p) { return p.id === s.calcProductId; }) || {}).name || '— none / generic —',
+      filteredProducts: (function () { var qq = (s.productPickerQuery || '').trim().toLowerCase(); return allProducts.filter(function (p) { return !qq || (p.name + ' ' + p.brand + ' ' + p.type + ' ' + p.charge + ' ' + (p.subtitle || '')).toLowerCase().indexOf(qq) >= 0; }); })(),
+      calcPumpPickerOpen: s.calcPumpPickerOpen, calcPumpPickerQuery: s.calcPumpPickerQuery,
+      selectedCalcPumpLabel: (function () { var pp = allPumps.find(function (x) { return x.id === s.selectedCalcPumpId; }); return pp ? (pp.model + ' — ' + pp.maxFlow) : '— select a pump —'; })(),
+      filteredCalcPumps: (function () { var qq = (s.calcPumpPickerQuery || '').trim().toLowerCase(); return allPumps.filter(function (p) { return !qq || (p.model + ' ' + p.brand + ' ' + p.type).toLowerCase().indexOf(qq) >= 0; }); })(),
       showFlowConv: s.flowUnit !== 'm3h' && isFinite(parseFloat(s.flow)),
       flowConverted: this.fmt(parseFloat(s.flow) * this.flowFactor(s.flowUnit), 3),
       showSludgeConv: s.sludgeFlowUnit !== 'm3h' && isFinite(parseFloat(s.sludgeFlow)),
@@ -225,6 +231,32 @@
   // shared field/icon fragments
   var CHEV = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0C8577" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>';
   var DOWNARROW = "url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2210%22 height=%2210%22 fill=%22none%22 stroke=%22%2394A099%22 stroke-width=%222%22><path d=%22M2 3l3 3 3-3%22/></svg>')";
+
+  // ---- searchable combobox (tap → type to filter → pick) -------------------
+  function comboHtml(o) {
+    var chev = '<svg width="12" height="12" viewBox="0 0 10 10" style="flex-shrink:0;margin-left:8px;transition:transform .15s;transform:rotate(' + (o.open ? '180deg' : '0deg') + ');" fill="none" stroke="#94A099" stroke-width="2"><path d="M2 3l3 3 3-3"/></svg>';
+    var trigger = '<button data-act="' + o.toggleAct + '" style="width:100%;background:#FFF;border:1px solid ' + (o.open ? '#0C8577' : '#D8D2C4') + ';border-radius:12px;padding:13px 12px;font-size:14px;font-weight:600;color:' + (o.hasSelection ? '#16211F' : '#6B776F') + ';cursor:pointer;display:flex;align-items:center;justify-content:space-between;text-align:left;">' +
+      '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(o.selectedLabel) + '</span>' + chev + '</button>';
+    if (!o.open) return '<div data-combo="' + o.name + '">' + trigger + '</div>';
+    var rows = '';
+    if (o.includeNone) rows += '<button data-act="' + o.pickAct + '" data-id="" style="width:100%;text-align:left;background:#FFF;border:none;border-bottom:1px solid #F0EDE4;padding:11px 12px;cursor:pointer;font-size:14px;font-weight:600;color:#6B776F;">' + esc(o.noneLabel) + '</button>';
+    if (o.items.length) {
+      rows += o.items.map(function (it) {
+        var badge = it.tag ? '<span style="width:38px;height:26px;flex-shrink:0;border-radius:7px;background:' + (it.tint || '#EEE') + ';color:' + (it.tintText || '#333') + ';font-family:\'IBM Plex Mono\';font-size:10px;font-weight:600;display:flex;align-items:center;justify-content:center;">' + esc(it.tag) + '</span>' : '';
+        return '<button data-act="' + o.pickAct + '" data-id="' + esc(it.id) + '" style="width:100%;text-align:left;background:' + (it.selected ? '#ECF7F3' : '#FFF') + ';border:none;border-bottom:1px solid #F0EDE4;padding:10px 12px;cursor:pointer;display:flex;align-items:center;gap:10px;">' + badge +
+          '<span style="min-width:0;flex:1;"><span style="display:block;font-size:14px;font-weight:600;color:#16211F;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(it.label) + '</span>' +
+          (it.sub ? '<span style="display:block;font-size:11.5px;color:#6B776F;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(it.sub) + '</span>' : '') + '</span></button>';
+      }).join('');
+    } else {
+      rows += '<div style="padding:16px 12px;font-size:13px;color:#94A099;text-align:center;line-height:1.5;">No match for “' + esc(o.query) + '”.</div>';
+    }
+    var panel = '<div style="margin-top:7px;background:#FFF;border:1px solid #D8D2C4;border-radius:12px;overflow:hidden;box-shadow:0 10px 26px rgba(0,0,0,0.10);">' +
+      '<div style="padding:8px;border-bottom:1px solid #EFEBE2;"><div style="position:relative;">' +
+        '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#94A099" stroke-width="2" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>' +
+        '<input data-set="' + o.setKey + '" data-key="' + o.setKey + '" value="' + esc(o.query) + '" placeholder="' + esc(o.searchPlaceholder) + '" style="width:100%;background:#FBF9F4;border:1px solid #E2DDD0;border-radius:9px;padding:9px 9px 9px 32px;font-size:14px;font-weight:500;"></div></div>' +
+      '<div style="max-height:246px;overflow-y:auto;-webkit-overflow-scrolling:touch;">' + rows + '</div></div>';
+    return '<div data-combo="' + o.name + '">' + trigger + panel + '</div>';
+  }
 
   // ============================ SCREENS =====================================
   App.screens = {};
@@ -404,8 +436,13 @@
       '<div><div style="font-size:11.5px;font-weight:600;color:#6B776F;margin-bottom:4px;">Neat density</div>' +
         '<div style="position:relative;"><input inputmode="decimal" data-set="density" data-key="density" value="' + esc(s.density) + '" placeholder="1.0" style="width:100%;background:#FBF9F4;border:1px solid #D8D2C4;border-radius:10px;padding:11px 44px 11px 11px;font-size:15px;font-family:\'IBM Plex Mono\';font-weight:600;"><span style="position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:11px;color:#94A099;font-weight:600;">kg/L</span></div></div>') : '';
     var pumpBlock = s.pumpSource === 'select' ? (
-      '<select data-actchange="onSelectCalcPump" data-key="selectedCalcPumpId" style="width:100%;background:#FBF9F4;border:1px solid #D8D2C4;border-radius:12px;padding:13px 12px;font-size:14px;font-weight:600;color:#16211F;appearance:none;background-image:' + DOWNARROW + ';background-repeat:no-repeat;background-position:right 13px center;">' +
-        '<option value="">— select a pump —</option>' + v.allPumps.map(function (p) { return '<option value="' + esc(p.id) + '"' + (p.id === s.selectedCalcPumpId ? ' selected' : '') + '>' + esc(p.model + ' — ' + p.maxFlow) + '</option>'; }).join('') + '</select>' +
+      comboHtml({
+        name: 'pump', open: v.calcPumpPickerOpen, query: v.calcPumpPickerQuery, setKey: 'calcPumpPickerQuery',
+        toggleAct: 'toggleCalcPumpPicker', pickAct: 'pickCalcPump',
+        selectedLabel: v.selectedCalcPumpLabel, hasSelection: !!s.selectedCalcPumpId,
+        includeNone: true, noneLabel: '— select a pump —', searchPlaceholder: 'Search model or brand…',
+        items: v.filteredCalcPumps.map(function (p) { return { id: p.id, label: p.model + ' — ' + p.maxFlow, sub: p.brand + ' · ' + p.type, tag: p.tag, tint: p.tint, tintText: p.tintText, selected: p.id === s.selectedCalcPumpId }; })
+      }) +
         (v.calcPumpChosen ? '<div style="margin-top:9px;background:#ECF7F3;border-radius:10px;padding:10px 12px;font-size:12px;color:#17564C;line-height:1.5;">' + esc(v.calcPumpInfo) + '</div>' : '')
     ) : (
       '<div style="position:relative;"><input inputmode="decimal" data-set="pumpMax" data-key="pumpMax" value="' + esc(s.pumpMax) + '" placeholder="0" style="width:100%;background:#FBF9F4;border:1px solid #D8D2C4;border-radius:12px;padding:13px 88px 13px 13px;font-size:16px;font-family:\'IBM Plex Mono\';font-weight:600;"><span style="position:absolute;right:13px;top:50%;transform:translateY(-50%);font-size:12px;color:#94A099;font-weight:600;">L/h max</span></div>'
@@ -429,7 +466,13 @@
         '<button data-act="onModeConc" style="' + v.modeConcStyle + '">Concentration<div style="font-size:10.5px;font-weight:500;opacity:.7;">mg/L on flow</div></button>' +
         '<button data-act="onModeSludge" style="' + v.modeSludgeStyle + '">Sludge dewatering<div style="font-size:10.5px;font-weight:500;opacity:.7;">kg / t dry solids</div></button></div>' +
       '<div style="margin-top:14px;"><div style="font-size:12.5px;font-weight:700;color:#4B564F;margin-bottom:5px;">Product</div>' +
-        '<select data-actchange="onSelectProduct" data-key="calcProductId" style="width:100%;background:#FFF;border:1px solid #D8D2C4;border-radius:12px;padding:13px 12px;font-size:14px;font-weight:600;color:#16211F;appearance:none;background-image:' + DOWNARROW + ';background-repeat:no-repeat;background-position:right 13px center;">' + productOpts + '</select></div>' +
+        comboHtml({
+          name: 'product', open: v.productPickerOpen, query: v.productPickerQuery, setKey: 'productPickerQuery',
+          toggleAct: 'toggleProductPicker', pickAct: 'pickProduct',
+          selectedLabel: v.selectedProductLabel, hasSelection: !!s.calcProductId,
+          includeNone: true, noneLabel: '— none / generic —', searchPlaceholder: 'Search product, brand or charge…',
+          items: v.filteredProducts.map(function (p) { return { id: p.id, label: p.name, sub: p.subtitle, tag: p.tag, tint: p.tint, tintText: p.tintText, selected: p.id === s.calcProductId }; })
+        }) + '</div>' +
       concBlock + sludgeBlock +
       '<div style="margin-top:14px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
         '<div style="font-size:12.5px;font-weight:700;color:#4B564F;margin-bottom:10px;">Make-down solution</div>' +
@@ -664,6 +707,12 @@
       if (el.dataset.set != null) { self.setState_change(el.dataset.set, el.value); }
       else if (el.dataset.actchange) { var fn = App.H[el.dataset.actchange]; if (fn) fn(el, e); }
     });
+    // click-away: tapping outside an open combobox closes it (capture, pre-render)
+    frame.addEventListener('pointerdown', function (e) {
+      if ((self.state.productPickerOpen || self.state.calcPumpPickerOpen) && !e.target.closest('[data-combo]')) {
+        self.state.productPickerOpen = false; self.state.calcPumpPickerOpen = false; self.render();
+      }
+    }, true);
     this.render();
   };
   App.setState_change = function (key, val) { var p = {}; p[key] = val; this.setState(p); };
@@ -700,6 +749,12 @@
         el.focus({ preventScroll: true });
         if (aStart != null && el.setSelectionRange) { try { el.setSelectionRange(aStart, aEnd); } catch (e2) {} }
       }
+    }
+    // one-shot: focus a field (e.g. a combobox search input) right after it opens
+    if (App._focusKey) {
+      var fk = this.$screen.querySelector('[data-key="' + (window.CSS && CSS.escape ? CSS.escape(App._focusKey) : App._focusKey) + '"]');
+      if (fk) { try { fk.focus({ preventScroll: true }); } catch (e3) {} }
+      App._focusKey = null;
     }
   };
 
