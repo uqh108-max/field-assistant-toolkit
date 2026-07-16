@@ -912,10 +912,12 @@
       } else if (prog.unitMismatch) {
         winHtml = '<div style="margin-top:10px;background:#FBF9F4;border:1px dashed #D8D2C4;border-radius:10px;padding:9px 12px;font-size:11.5px;color:#94A099;line-height:1.5;">The entered dose unit doesn’t match this product’s datasheet basis (' + esc((prog.product || {}).doseUnit || '') + ') — no window comparison shown.</div>';
       }
-      var consHtml = prog.hasCons ? '<div style="margin-top:9px;background:#16211F;border-radius:10px;padding:11px 13px;color:#EFECE3;display:flex;gap:18px;">' +
-        '<div><div style="font-size:10.5px;color:#6E8A82;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;">Product use</div><div style="font-size:15px;font-weight:600;font-family:\'IBM Plex Mono\';color:#4FE0B5;">' + esc(prog.kgH) + ' kg/h</div></div>' +
-        '<div><div style="font-size:10.5px;color:#6E8A82;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;">Per day</div><div style="font-size:15px;font-weight:600;font-family:\'IBM Plex Mono\';color:#4FE0B5;">' + esc(prog.kgDay) + ' kg</div></div>' +
-        '<div style="align-self:center;font-size:11px;color:#9FB0AA;line-height:1.4;">flow × dose, neat product basis</div></div>' : '';
+      var consHtml = prog.hasCons ? '<div style="margin-top:9px;background:#16211F;border-radius:10px;padding:11px 13px;color:#EFECE3;">' +
+        '<div style="display:flex;gap:22px;">' +
+        '<div><div style="font-size:10.5px;color:#6E8A82;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;">Product use</div><div style="font-size:15px;font-weight:600;font-family:\'IBM Plex Mono\';color:#4FE0B5;white-space:nowrap;">' + esc(prog.kgH) + ' kg/h</div></div>' +
+        '<div><div style="font-size:10.5px;color:#6E8A82;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;">Per day</div><div style="font-size:15px;font-weight:600;font-family:\'IBM Plex Mono\';color:#4FE0B5;white-space:nowrap;">' + esc(prog.kgDay) + ' kg</div></div>' +
+        '</div>' +
+        '<div style="margin-top:6px;font-size:11px;color:#9FB0AA;line-height:1.4;">flow × dose, neat product basis</div></div>' : '';
       var progBtns = '<div style="margin-top:11px;display:flex;gap:8px;">' +
         '<button data-act="guideProgToCalc" ' + (prog.canSend ? '' : 'disabled ') + 'style="flex:1;border:none;cursor:pointer;background:' + (prog.canSend ? '#0C8577' : '#C9D2CD') + ';color:#FFF;border-radius:11px;padding:12px 8px;font-size:13px;font-weight:700;">Send to calculator</button>' +
         '<button data-act="guideProgRetest" ' + (prog.canRetest ? '' : 'disabled ') + 'style="flex:1;border:1px solid ' + (prog.canRetest ? '#0C8577' : '#C9D2CD') + ';cursor:pointer;background:#FFF;color:' + (prog.canRetest ? '#0C8577' : '#B4BBB4') + ';border-radius:11px;padding:12px 8px;font-size:13px;font-weight:700;">Retest 50–150% in jars</button></div>' +
@@ -931,7 +933,7 @@
           items: v.filteredGuideProgProducts.map(function (p) { return { id: p.id, label: p.name, sub: p.subtitle, tag: p.tag, tint: p.tint, tintText: p.tintText, selected: p.id === s.guideProgProductId }; })
         }) +
         '<div style="margin-top:6px;font-size:10.5px;color:#94A099;line-height:1.4;">Product not listed? Add it under Products → “Add your own product”, then pick it here.</div>' +
-        '<div style="margin-top:10px;display:grid;grid-template-columns:1fr 1fr;gap:10px;">' +
+        '<div style="margin-top:10px;display:flex;flex-direction:column;gap:10px;">' +
           '<div><div style="font-size:11.5px;font-weight:600;color:#6B776F;margin-bottom:4px;">Current dose rate</div>' +
             '<div style="display:flex;border:1px solid #D8D2C4;border-radius:10px;background:#FBF9F4;overflow:hidden;"><input inputmode="decimal" data-set="guideProgDose" data-key="guideProgDose" value="' + esc(s.guideProgDose) + '" placeholder="—" style="flex:1;min-width:0;border:none;background:transparent;padding:11px;font-size:15px;font-family:\'IBM Plex Mono\';font-weight:600;">' + unitSel + '</div></div>' +
           '<div><div style="font-size:11.5px;font-weight:600;color:#6B776F;margin-bottom:4px;">Plant / feed flow</div>' +
