@@ -112,7 +112,12 @@
       var nTests = s.jarTests.filter(function (x) { return x.clientId === c.id; }).length;
       var hasCalc = !!c.mode;
       var readings = (c.readings || []).slice(0, 2).map(function (r) {
-        return r.date + ' · ' + r.app + ' — ' + r.values.map(function (x) { return x.label + ' ' + x.v + (x.u ? ' ' + x.u : ''); }).join(', ');
+        var progTxt = '';
+        if (r.prog) {
+          progTxt = 'Dosing: ' + (r.prog.product || 'current product') + (r.prog.dose ? (' ' + r.prog.dose + ' ' + r.prog.unit) : '') + (r.prog.flow ? (' @ ' + r.prog.flow + ' ' + r.prog.flowUnit) : '');
+          if (r.values.length) progTxt += ' · ';
+        }
+        return r.date + ' · ' + r.app + ' — ' + progTxt + r.values.map(function (x) { return x.label + ' ' + x.v + (x.u ? ' ' + x.u : ''); }).join(', ');
       });
       return {
         id: c.id, name: c.name, site: c.site || 'No site noted',
@@ -209,6 +214,9 @@
       calcPumpPickerOpen: s.calcPumpPickerOpen, calcPumpPickerQuery: s.calcPumpPickerQuery,
       selectedCalcPumpLabel: (function () { var pp = allPumps.find(function (x) { return x.id === s.selectedCalcPumpId; }); return pp ? (pp.model + ' — ' + pp.maxFlow) : '— select a pump —'; })(),
       filteredCalcPumps: (function () { var qq = (s.calcPumpPickerQuery || '').trim().toLowerCase(); return allPumps.filter(function (p) { return !qq || (p.model + ' ' + p.brand + ' ' + p.type).toLowerCase().indexOf(qq) >= 0; }); })(),
+      guideProgPickerOpen: s.guideProgPickerOpen, guideProgPickerQuery: s.guideProgPickerQuery,
+      selectedGuideProgLabel: (allProducts.find(function (p) { return p.id === s.guideProgProductId; }) || {}).name || '— select their product —',
+      filteredGuideProgProducts: (function () { var qq = (s.guideProgPickerQuery || '').trim().toLowerCase(); return allProducts.filter(function (p) { return !qq || (p.name + ' ' + p.brand + ' ' + p.type + ' ' + p.charge + ' ' + (p.subtitle || '')).toLowerCase().indexOf(qq) >= 0; }); })(),
       jarProductPickerOpen: s.jarProductPickerOpen, jarProductPickerQuery: s.jarProductPickerQuery,
       selectedJarProductLabel: (allProducts.find(function (p) { return p.id === s.jarProductId; }) || {}).name || '— select a product —',
       filteredJarProducts: (function () { var qq = (s.jarProductPickerQuery || '').trim().toLowerCase(); return allProducts.filter(function (p) { return !qq || (p.name + ' ' + p.brand + ' ' + p.type + ' ' + p.charge + ' ' + (p.subtitle || '')).toLowerCase().indexOf(qq) >= 0; }); })(),
@@ -884,6 +892,53 @@
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">' + fieldCells + '</div>' + computedLine + saveRow + '</div>';
     }
 
+    // Current dosing programme — what the plant runs today (product, rate, flow).
+    // Grounded: window check against the library datasheet range, consumption is
+    // flow × dose arithmetic; both save to the client with the readings.
+    var progHtml = '';
+    if (g.fields && g.fields.length) {
+      var prog = App.computeProg();
+      var unitSel = '<select data-set="guideProgDoseUnit" data-key="guideProgDoseUnit" style="border:none;border-left:1px solid #E2DDD0;background:#F6F3EC;padding:0 26px 0 10px;font-size:12px;font-weight:700;color:#4B564F;appearance:none;cursor:pointer;background-image:' + DOWNARROW + ';background-repeat:no-repeat;background-position:right 9px center;">' +
+        optionTags([{ v: 'mgL', label: 'mg/L' }, { v: 'kgt', label: 'kg/t DS' }, { v: 'gt', label: 'g/t DS' }], s.guideProgDoseUnit, 'v', 'label') + '</select>';
+      var flowSel = '<select data-set="guideProgFlowUnit" data-key="guideProgFlowUnit" style="border:none;border-left:1px solid #E2DDD0;background:#F6F3EC;padding:0 26px 0 10px;font-size:12px;font-weight:700;color:#4B564F;appearance:none;cursor:pointer;background-image:' + DOWNARROW + ';background-repeat:no-repeat;background-position:right 9px center;">' +
+        optionTags(App.FLOW_UNITS, s.guideProgFlowUnit, 'v', 'label') + '</select>';
+      var winHtml = '';
+      if (prog.win) {
+        var w = prog.win, wok = w.status === 'within';
+        var wmsg = wok ? 'sits <b>within</b> the datasheet window — a fair baseline; a bracketing retest shows if less still performs.'
+          : (w.status === 'above' ? 'is <b>above</b> the datasheet window — possible overdose (wasted product, risk of re-stabilising solids). Retest downward.'
+            : 'is <b>below</b> the datasheet window — may be underdosing. Retest upward before concluding the product has failed.');
+        winHtml = '<div style="margin-top:10px;background:' + (wok ? '#ECF7F3' : '#FBF6EC') + ';border:1px solid ' + (wok ? '#B8E0D3' : '#EBD9BC') + ';border-radius:10px;padding:10px 12px;font-size:12.5px;line-height:1.55;color:' + (wok ? '#17564C' : '#6B5A38') + ';"><b>' + esc(w.name) + '</b> — typical window <b style="font-family:\'IBM Plex Mono\';">' + w.lo + '–' + w.hi + ' ' + w.unit + '</b> ' + vbadge(w.verified) + '. Their rate (' + w.val + ') ' + wmsg + '</div>';
+      } else if (prog.unitMismatch) {
+        winHtml = '<div style="margin-top:10px;background:#FBF9F4;border:1px dashed #D8D2C4;border-radius:10px;padding:9px 12px;font-size:11.5px;color:#94A099;line-height:1.5;">The entered dose unit doesn’t match this product’s datasheet basis (' + esc((prog.product || {}).doseUnit || '') + ') — no window comparison shown.</div>';
+      }
+      var consHtml = prog.hasCons ? '<div style="margin-top:9px;background:#16211F;border-radius:10px;padding:11px 13px;color:#EFECE3;display:flex;gap:18px;">' +
+        '<div><div style="font-size:10.5px;color:#6E8A82;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;">Product use</div><div style="font-size:15px;font-weight:600;font-family:\'IBM Plex Mono\';color:#4FE0B5;">' + esc(prog.kgH) + ' kg/h</div></div>' +
+        '<div><div style="font-size:10.5px;color:#6E8A82;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;">Per day</div><div style="font-size:15px;font-weight:600;font-family:\'IBM Plex Mono\';color:#4FE0B5;">' + esc(prog.kgDay) + ' kg</div></div>' +
+        '<div style="align-self:center;font-size:11px;color:#9FB0AA;line-height:1.4;">flow × dose, neat product basis</div></div>' : '';
+      var progBtns = '<div style="margin-top:11px;display:flex;gap:8px;">' +
+        '<button data-act="guideProgToCalc" ' + (prog.canSend ? '' : 'disabled ') + 'style="flex:1;border:none;cursor:pointer;background:' + (prog.canSend ? '#0C8577' : '#C9D2CD') + ';color:#FFF;border-radius:11px;padding:12px 8px;font-size:13px;font-weight:700;">Send to calculator</button>' +
+        '<button data-act="guideProgRetest" ' + (prog.canRetest ? '' : 'disabled ') + 'style="flex:1;border:1px solid ' + (prog.canRetest ? '#0C8577' : '#C9D2CD') + ';cursor:pointer;background:#FFF;color:' + (prog.canRetest ? '#0C8577' : '#B4BBB4') + ';border-radius:11px;padding:12px 8px;font-size:13px;font-weight:700;">Retest 50–150% in jars</button></div>' +
+        (prog.canRetest ? '' : '<div style="margin-top:6px;font-size:10.5px;color:#94A099;">Retest bracketing works on mg/L doses (jar tests dose on flow).</div>');
+      progHtml = '<div style="margin-top:12px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
+        '<div style="font-size:12.5px;font-weight:700;color:#4B564F;">Current dosing programme</div>' +
+        '<div style="font-size:12px;color:#6B776F;line-height:1.5;margin:4px 0 11px;">What the plant runs today — their product, rate and flow. Saves with the readings; checks the rate against the datasheet window.</div>' +
+        comboHtml({
+          name: 'guideProduct', open: v.guideProgPickerOpen, query: v.guideProgPickerQuery, setKey: 'guideProgPickerQuery',
+          toggleAct: 'toggleGuideProgPicker', pickAct: 'pickGuideProgProduct',
+          selectedLabel: v.selectedGuideProgLabel, hasSelection: !!s.guideProgProductId,
+          includeNone: true, noneLabel: '— not in library / unknown —', searchPlaceholder: 'Search product, brand or charge…',
+          items: v.filteredGuideProgProducts.map(function (p) { return { id: p.id, label: p.name, sub: p.subtitle, tag: p.tag, tint: p.tint, tintText: p.tintText, selected: p.id === s.guideProgProductId }; })
+        }) +
+        '<div style="margin-top:6px;font-size:10.5px;color:#94A099;line-height:1.4;">Product not listed? Add it under Products → “Add your own product”, then pick it here.</div>' +
+        '<div style="margin-top:10px;display:grid;grid-template-columns:1fr 1fr;gap:10px;">' +
+          '<div><div style="font-size:11.5px;font-weight:600;color:#6B776F;margin-bottom:4px;">Current dose rate</div>' +
+            '<div style="display:flex;border:1px solid #D8D2C4;border-radius:10px;background:#FBF9F4;overflow:hidden;"><input inputmode="decimal" data-set="guideProgDose" data-key="guideProgDose" value="' + esc(s.guideProgDose) + '" placeholder="—" style="flex:1;min-width:0;border:none;background:transparent;padding:11px;font-size:15px;font-family:\'IBM Plex Mono\';font-weight:600;">' + unitSel + '</div></div>' +
+          '<div><div style="font-size:11.5px;font-weight:600;color:#6B776F;margin-bottom:4px;">Plant / feed flow</div>' +
+            '<div style="display:flex;border:1px solid #D8D2C4;border-radius:10px;background:#FBF9F4;overflow:hidden;"><input inputmode="decimal" data-set="guideProgFlow" data-key="guideProgFlow" value="' + esc(s.guideProgFlow) + '" placeholder="—" style="flex:1;min-width:0;border:none;background:transparent;padding:11px;font-size:15px;font-family:\'IBM Plex Mono\';font-weight:600;">' + flowSel + '</div></div>' +
+        '</div>' + winHtml + consHtml + progBtns + '</div>';
+    }
+
     var tdiHtml = '';
     if (g.tdi) {
       var tdi = App.computeTdi();
@@ -918,7 +973,7 @@
         '<div style="width:56px;height:56px;flex-shrink:0;border-radius:15px;background:' + esc(g.tint) + ';display:flex;align-items:center;justify-content:center;font-family:\'IBM Plex Mono\';font-weight:600;font-size:14px;color:' + esc(g.tintText) + ';">' + esc(g.tag) + '</div>' +
         '<div style="min-width:0;"><div style="font-size:20px;font-weight:800;letter-spacing:-0.02em;line-height:1.2;">' + esc(g.name) + '</div><div style="font-size:12px;color:#6B776F;margin-top:2px;">' + esc(g.mech) + '</div></div></div>' +
       '<div style="margin-top:13px;font-size:13.5px;line-height:1.55;color:#333E39;">' + esc(g.intro) + '</div>' +
-      outputsHtml + measureHtml + readingsHtml + tdiHtml + subsHtml + endpointsHtml + doseHtml + benchHtml + cautionsHtml + linksHtml +
+      outputsHtml + measureHtml + readingsHtml + progHtml + tdiHtml + subsHtml + endpointsHtml + doseHtml + benchHtml + cautionsHtml + linksHtml +
       guideSrcNote('Not a substitute for jar or bench testing.') +
     '</div>';
   };
@@ -952,7 +1007,7 @@
       if (el.dataset.set != null) {
         self.state[el.dataset.set] = el.value;
         // search boxes update only their own option list — no full-screen re-render (smooth typing)
-        var comboName = { productPickerQuery: 'product', calcPumpPickerQuery: 'pump', jarProductPickerQuery: 'jarProduct' }[el.dataset.set];
+        var comboName = { productPickerQuery: 'product', calcPumpPickerQuery: 'pump', jarProductPickerQuery: 'jarProduct', guideProgPickerQuery: 'guideProduct' }[el.dataset.set];
         if (comboName) self.updateComboList(comboName);
         else self.render();
       }
@@ -966,8 +1021,8 @@
     });
     // click-away: tapping outside an open combobox closes it (capture, pre-render)
     frame.addEventListener('pointerdown', function (e) {
-      if ((self.state.productPickerOpen || self.state.calcPumpPickerOpen || self.state.jarProductPickerOpen) && !e.target.closest('[data-combo]')) {
-        self.state.productPickerOpen = false; self.state.calcPumpPickerOpen = false; self.state.jarProductPickerOpen = false; self.render();
+      if ((self.state.productPickerOpen || self.state.calcPumpPickerOpen || self.state.jarProductPickerOpen || self.state.guideProgPickerOpen) && !e.target.closest('[data-combo]')) {
+        self.state.productPickerOpen = false; self.state.calcPumpPickerOpen = false; self.state.jarProductPickerOpen = false; self.state.guideProgPickerOpen = false; self.render();
       }
     }, true);
     // keep the mobile picker sheet fitted above the on-screen keyboard as it opens/closes
@@ -987,6 +1042,7 @@
     if (name === 'product') cfg = { pickAct: 'pickProduct', includeNone: true, noneLabel: '— none / generic —', query: v.productPickerQuery, items: v.filteredProducts.map(function (p) { return { id: p.id, label: p.name, sub: p.subtitle, tag: p.tag, tint: p.tint, tintText: p.tintText, selected: p.id === s.calcProductId }; }) };
     else if (name === 'pump') cfg = { pickAct: 'pickCalcPump', includeNone: true, noneLabel: '— select a pump —', query: v.calcPumpPickerQuery, items: v.filteredCalcPumps.map(function (p) { return { id: p.id, label: p.model + ' — ' + p.maxFlow, sub: p.brand + ' · ' + p.type, tag: p.tag, tint: p.tint, tintText: p.tintText, selected: p.id === s.selectedCalcPumpId }; }) };
     else if (name === 'jarProduct') cfg = { pickAct: 'pickJarProduct', includeNone: true, noneLabel: '— select a product —', query: v.jarProductPickerQuery, items: v.filteredJarProducts.map(function (p) { return { id: p.id, label: p.name, sub: p.subtitle, tag: p.tag, tint: p.tint, tintText: p.tintText, selected: p.id === s.jarProductId }; }) };
+    else if (name === 'guideProduct') cfg = { pickAct: 'pickGuideProgProduct', includeNone: true, noneLabel: '— not in library / unknown —', query: v.guideProgPickerQuery, items: v.filteredGuideProgProducts.map(function (p) { return { id: p.id, label: p.name, sub: p.subtitle, tag: p.tag, tint: p.tint, tintText: p.tintText, selected: p.id === s.guideProgProductId }; }) };
     else return;
     var el = this.$screen.querySelector('[data-combo-list="' + name + '"]');
     if (el) el.innerHTML = comboRowsHtml(cfg);

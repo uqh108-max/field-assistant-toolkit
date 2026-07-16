@@ -64,6 +64,8 @@
       showJarSave: false, jarSaveClient: '', jarSaveNote: '', jarSaved: false,
       guideId: null, guideChecks: {},
       guideReadings: {}, guideSaveClient: '', guideSaveName: '', guideSaved: false,
+      guideProgProductId: '', guideProgPickerOpen: false, guideProgPickerQuery: '',
+      guideProgDose: '', guideProgDoseUnit: 'mgL', guideProgFlow: '', guideProgFlowUnit: 'm3h',
       jarCurrentDose: '',
       mgSample: '500', mgSolids: '30', mgStock: '0.1', mgMl: ''
     },
@@ -252,24 +254,50 @@
       };
     },
 
-    // Compare the dose currently entered in the calc against the selected
-    // product's datasheet/typical dose window. Only compares when the product's
-    // dose unit matches the calc mode (mg/L ↔ conc, kg/t DS ↔ sludge).
-    doseWindow: function () {
-      var s = this.state;
-      var p = this.allProducts().find(function (x) { return x.id === s.calcProductId; });
-      if (!p || !p.doseRange) return null;
+    // Window comparison against a specific product's datasheet range. `val` must
+    // already be in the product's own dose basis (mg/L or kg/t DS).
+    doseWindowFor: function (p, val) {
+      if (!p || !p.doseRange || !isFinite(val) || val <= 0) return null;
       var all = String(p.doseRange).match(/[\d.]+\s*[–—-]\s*[\d.]+/g);
       if (!all || all.length !== 1) return null; // no window, or multiple context-specific windows — don't guess which applies
       var m = all[0].match(/([\d.]+)\s*[–—-]\s*([\d.]+)/);
       var lo = parseFloat(m[1]), hi = parseFloat(m[2]);
       if (!isFinite(lo) || !isFinite(hi) || hi <= 0) return null;
       var isSludgeUnit = String(p.doseUnit || '').indexOf('dry solids') >= 0;
-      if (isSludgeUnit !== (s.calcMode === 'sludge')) return null;
-      var val = parseFloat(isSludgeUnit ? s.doseKg : s.dose);
-      if (!isFinite(val) || val <= 0) return null;
       var status = val < lo ? 'below' : (val > hi ? 'above' : 'within');
       return { lo: lo, hi: hi, val: val, status: status, unit: isSludgeUnit ? 'kg/t DS' : 'mg/L', raw: p.doseRange, name: p.name, verified: p.verified };
+    },
+    // Calc screen: compare the entered dose when the product's dose unit matches
+    // the calc mode (mg/L ↔ conc, kg/t DS ↔ sludge).
+    doseWindow: function () {
+      var s = this.state;
+      var p = this.allProducts().find(function (x) { return x.id === s.calcProductId; });
+      if (!p) return null;
+      var isSludgeUnit = String(p.doseUnit || '').indexOf('dry solids') >= 0;
+      if (isSludgeUnit !== (s.calcMode === 'sludge')) return null;
+      return this.doseWindowFor(p, parseFloat(isSludgeUnit ? s.doseKg : s.dose));
+    },
+    // Current dosing programme entered in a playbook: window check + consumption.
+    computeProg: function () {
+      var s = this.state;
+      var p = this.allProducts().find(function (x) { return x.id === s.guideProgProductId; }) || null;
+      var d = parseFloat(s.guideProgDose);
+      var basis = s.guideProgDoseUnit; // mgL | kgt | gt
+      var win = null, unitMismatch = false;
+      if (p && isFinite(d)) {
+        var sludgeUnit = String(p.doseUnit || '').indexOf('dry solids') >= 0;
+        var val = sludgeUnit ? (basis === 'kgt' ? d : (basis === 'gt' ? d / 1000 : NaN)) : (basis === 'mgL' ? d : NaN);
+        if (isFinite(val)) win = this.doseWindowFor(p, val);
+        else unitMismatch = true;
+      }
+      var Q = parseFloat(s.guideProgFlow) * this.flowFactor(s.guideProgFlowUnit);
+      var kgH = (basis === 'mgL' && isFinite(Q) && isFinite(d)) ? Q * d / 1000 : NaN;
+      return {
+        product: p, win: win, unitMismatch: unitMismatch,
+        kgH: this.fmt(kgH, 2), kgDay: this.fmt(kgH * 24, 1), hasCons: isFinite(kgH),
+        canRetest: basis === 'mgL' && isFinite(d) && d > 0,
+        canSend: isFinite(d) || isFinite(Q)
+      };
     },
 
     // ---- state plumbing -----------------------------------------------------
@@ -301,7 +329,12 @@
 
     // guide (field playbooks)
     goGuide: function () { App.setState({ screen: 'guide', guideId: null, productId: null }); },
-    openGuide: function (el) { App.setState({ screen: 'guide', guideId: el.dataset.id }); },
+    openGuide: function (el) {
+      var id = el.dataset.id;
+      // default dose basis per application; entered values survive navigation
+      var basis = { sludge: 'kgt', mining: 'gt' }[id] || 'mgL';
+      App.setState({ screen: 'guide', guideId: id, guideProgDoseUnit: basis, guideSaved: false });
+    },
     backToGuide: function () { App.setState({ guideId: null }); },
     toggleGuideCheck: function (el) {
       var k = el.dataset.ck;
@@ -317,6 +350,44 @@
       g[el.dataset.f] = el.value;
       App.setState({ guideReadings: g, guideSaved: false });
     },
+    toggleGuideProgPicker: function () {
+      var open = !App.state.guideProgPickerOpen;
+      App._focusKey = open ? 'guideProgPickerQuery' : null;
+      App.setState({ guideProgPickerOpen: open, guideProgPickerQuery: '' });
+    },
+    pickGuideProgProduct: function (el) {
+      App.setState({ guideProgProductId: el.dataset.id, guideProgPickerOpen: false, guideProgPickerQuery: '', guideSaved: false });
+    },
+    // Carry the plant's current programme into the calculator. An explicit
+    // "send" action is allowed to set the matching calc mode.
+    guideProgToCalc: function () {
+      var s = App.state;
+      var p = App.allProducts().find(function (x) { return x.id === s.guideProgProductId; });
+      var patch = { screen: 'calc' };
+      if (p) {
+        patch.calcProductId = p.id;
+        patch.form = p.form === 'Powder' ? 'powder' : 'liquid';
+        if (p.density) patch.density = String(p.density);
+      }
+      var d = parseFloat(s.guideProgDose);
+      if (s.guideProgDoseUnit === 'mgL') {
+        patch.calcMode = 'conc';
+        if (isFinite(d)) patch.dose = s.guideProgDose;
+        if (s.guideProgFlow.trim()) { patch.flow = s.guideProgFlow; patch.flowUnit = s.guideProgFlowUnit; }
+      } else {
+        patch.calcMode = 'sludge';
+        if (isFinite(d)) patch.doseKg = String(s.guideProgDoseUnit === 'gt' ? d / 1000 : d);
+        if (s.guideProgFlow.trim()) { patch.sludgeFlow = s.guideProgFlow; patch.sludgeFlowUnit = s.guideProgFlowUnit; }
+      }
+      App.setState(patch);
+    },
+    // Optimisation retest of the current programme: jump to jars pre-bracketed.
+    guideProgRetest: function () {
+      var d = parseFloat(App.state.guideProgDose);
+      if (!isFinite(d) || d <= 0) return;
+      App.setState({ screen: 'jars', jarCurrentDose: String(d) });
+      App.H.bracketJars();
+    },
     saveGuideReadings: function () {
       var s = App.state;
       var pb = window.PLAYBOOKS.list.find(function (x) { return x.id === s.guideId; });
@@ -326,7 +397,18 @@
         var v = (s.guideReadings[pb.id + ':' + f.k] || '').trim();
         if (v) vals.push({ label: f.label, v: v, u: f.u });
       });
-      if (!vals.length) return;
+      // current dosing programme (product / rate / flow) saves alongside the readings
+      var progP = App.allProducts().find(function (x) { return x.id === s.guideProgProductId; });
+      var pd = (s.guideProgDose || '').trim(), pf = (s.guideProgFlow || '').trim();
+      var prog = null;
+      if (progP || pd || pf) {
+        prog = {
+          product: progP ? progP.name : '',
+          dose: pd, unit: { mgL: 'mg/L', kgt: 'kg/t DS', gt: 'g/t DS' }[s.guideProgDoseUnit] || 'mg/L',
+          flow: pf, flowUnit: (App.FLOW_UNITS.find(function (f) { return f.v === s.guideProgFlowUnit; }) || { label: 'm³/h' }).label
+        };
+      }
+      if (!vals.length && !prog) return;
       var clients = s.clients.slice();
       var cid = s.guideSaveClient;
       if (!cid && s.guideSaveName.trim()) {
@@ -334,7 +416,7 @@
         clients = [nc].concat(clients); cid = nc.id;
       }
       if (!cid) return;
-      var entry = { date: new Date().toLocaleDateString('en-AU'), app: pb.name, values: vals };
+      var entry = { date: new Date().toLocaleDateString('en-AU'), app: pb.name, values: vals, prog: prog };
       clients = clients.map(function (c) {
         if (c.id !== cid) return c;
         var copy = Object.assign({}, c);
@@ -435,7 +517,7 @@
         calcPumpPickerOpen: false, calcPumpPickerQuery: ''
       });
     },
-    closePickers: function () { App.setState({ productPickerOpen: false, calcPumpPickerOpen: false, jarProductPickerOpen: false }); },
+    closePickers: function () { App.setState({ productPickerOpen: false, calcPumpPickerOpen: false, jarProductPickerOpen: false, guideProgPickerOpen: false }); },
     toggleJarProductPicker: function () {
       var open = !App.state.jarProductPickerOpen;
       App._focusKey = open ? 'jarProductPickerQuery' : null;
