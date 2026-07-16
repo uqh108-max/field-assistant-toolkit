@@ -59,6 +59,14 @@ window.PLAYBOOKS = {
       ],
       products: [{ label: 'Browse coagulants (alum · PACl · ferric)', filter: 'Coagulant' }],
       actions: [{ act: 'guideToJars', label: 'Set up a jar test' }, { act: 'goCalc', label: 'Open dosing calc' }],
+      fields: [
+        { k: 'turb', label: 'Turbidity', u: 'NTU' },
+        { k: 'uv', label: 'UV254', u: '/cm' },
+        { k: 'alk', label: 'Alkalinity', u: 'mg/L CaCO₃' },
+        { k: 'ph', label: 'Raw pH', u: '' },
+        { k: 'cond', label: 'Conductivity', u: 'µS/cm' },
+        { k: 'temp', label: 'Temperature', u: '°C' }
+      ],
       tdi: true
     },
     {
@@ -88,7 +96,15 @@ window.PLAYBOOKS = {
         'Best phosphorus removal does not sit at the lowest charge — metal salts also remove P by precipitation and adsorption onto metal-hydroxide solids. Judge P removal by residual ortho-P, not floc appearance.'
       ],
       products: [{ label: 'Browse coagulants (ferric · alum · PACl)', filter: 'Coagulant' }],
-      actions: [{ act: 'guideToJars', label: 'Set up a jar test' }, { act: 'goCalc', label: 'Open dosing calc' }]
+      actions: [{ act: 'guideToJars', label: 'Set up a jar test' }, { act: 'goCalc', label: 'Open dosing calc' }],
+      fields: [
+        { k: 'tss', label: 'TSS', u: 'mg/L' },
+        { k: 'codt', label: 'Total COD', u: 'mg/L' },
+        { k: 'codf', label: 'Filtered COD', u: 'mg/L' },
+        { k: 'po4', label: 'Orthophosphate', u: 'mg/L P' },
+        { k: 'ph', label: 'pH', u: '' },
+        { k: 'alk', label: 'Alkalinity', u: 'mg/L CaCO₃' }
+      ]
     },
     {
       id: 'sludge', tag: 'SLG', tint: '#FBF6EC', tintText: '#8A5E17',
@@ -115,7 +131,13 @@ window.PLAYBOOKS = {
         'Matured polymer is shear-sensitive — record solution age and make-down strength with every test, or results are not comparable.'
       ],
       products: [{ label: 'Browse cationic flocculants (Zetag · Praestol)', filter: 'Cationic' }],
-      actions: [{ act: 'guideToSludgeCalc', label: 'Open sludge dewatering calc' }]
+      actions: [{ act: 'guideToSludgeCalc', label: 'Open sludge dewatering calc' }],
+      fields: [
+        { k: 'solids', label: 'Feed solids', u: '% DS' },
+        { k: 'vs', label: 'Volatile solids', u: '% of DS' },
+        { k: 'ph', label: 'pH', u: '' },
+        { k: 'cond', label: 'Conductivity', u: 'µS/cm' }
+      ]
     },
     {
       id: 'industrial', tag: 'IND', tint: '#F3EFFA', tintText: '#6A4CA0',
@@ -157,7 +179,15 @@ window.PLAYBOOKS = {
         'No single charge measurement describes success in oily or coloured streams — industrial studies evaluate oil, COD, TSS and turbidity together (per the playbook brief).'
       ],
       products: [{ label: 'Browse coagulants & cationic organics', filter: 'Coagulant' }],
-      actions: [{ act: 'guideToJars', label: 'Set up a jar test' }]
+      actions: [{ act: 'guideToJars', label: 'Set up a jar test' }],
+      fields: [
+        { k: 'ph', label: 'pH', u: '' },
+        { k: 'cond', label: 'Conductivity', u: 'µS/cm' },
+        { k: 'codt', label: 'Total COD', u: 'mg/L' },
+        { k: 'codf', label: 'Filtered COD', u: 'mg/L' },
+        { k: 'og', label: 'Oil & grease', u: 'mg/L' },
+        { k: 'colour', label: 'True colour', u: 'PtCo' }
+      ]
     },
     {
       id: 'mining', tag: 'MIN', tint: '#FBEFE7', tintText: '#B05A28',
@@ -191,6 +221,14 @@ window.PLAYBOOKS = {
       ],
       products: [{ label: 'Browse anionic flocculants (Magnafloc · FLOPAM AN)', filter: 'Anionic' }],
       actions: [],
+      fields: [
+        { k: 'solids', label: 'Solids', u: '% w/w' },
+        { k: 'ph', label: 'pH', u: '' },
+        { k: 'cond', label: 'Conductivity', u: 'µS/cm' },
+        { k: 'ca', label: 'Calcium', u: 'mg/L' },
+        { k: 'mg', label: 'Magnesium', u: 'mg/L' },
+        { k: 'so4', label: 'Sulphate', u: 'mg/L' }
+      ],
       bench: true
     }
   ]

@@ -110,12 +110,19 @@
       var fu = (FU.find(function (x) { return x.v === c.flowUnit; }) || { label: 'm³/h' }).label;
       var su = (FU.find(function (x) { return x.v === c.sludgeFlowUnit; }) || { label: 'm³/h' }).label;
       var nTests = s.jarTests.filter(function (x) { return x.clientId === c.id; }).length;
+      var hasCalc = !!c.mode;
+      var readings = (c.readings || []).slice(0, 2).map(function (r) {
+        return r.date + ' · ' + r.app + ' — ' + r.values.map(function (x) { return x.label + ' ' + x.v + (x.u ? ' ' + x.u : ''); }).join(', ');
+      });
       return {
         id: c.id, name: c.name, site: c.site || 'No site noted',
-        summary: (c.productName || 'Generic') + ' · ' + (c.mode === 'sludge' ? (c.doseKg + ' kg/tDS') : (c.dose + ' mg/L')),
+        summary: hasCalc ? ((c.productName || 'Generic') + ' · ' + (c.mode === 'sludge' ? (c.doseKg + ' kg/tDS') : (c.dose + ' mg/L'))) : 'Site readings on file — no calc saved yet',
+        hasCalc: hasCalc,
         chip1: (c.mode === 'sludge' ? (c.sludgeFlow + ' ' + su + ' sludge') : (c.flow + ' ' + fu)),
         chip2: (c.mode === 'sludge' ? (c.doseKg + ' kg/t DS') : (c.dose + ' mg/L')),
         chip3: (c.productName || 'Generic product'),
+        readings: readings,
+        nReadings: (c.readings || []).length,
         hasTests: nTests > 0,
         testLabel: nTests + ' saved jar test' + (nTests === 1 ? '' : 's')
       };
@@ -194,7 +201,7 @@
       winnerN: winnerJar ? (s.winner + 1) : '', winnerPpm: this.fmt(winnerPpmNum, 2),
       pumpRows: pumpRows,
       noPumpMatch: pumpRows.length === 0 && s.pumpQuery.trim().length > 0 && !s.pumpLoading,
-      calc: calc, cal: cal,
+      calc: calc, cal: cal, doseWin: this.doseWindow(),
       calcPumpChosen: !!s.selectedCalcPumpId, calcPumpInfo: calcPumpInfo,
       productPickerOpen: s.productPickerOpen, productPickerQuery: s.productPickerQuery,
       selectedProductLabel: (allProducts.find(function (p) { return p.id === s.calcProductId; }) || {}).name || '— none / generic —',
@@ -504,6 +511,18 @@
           items: v.filteredProducts.map(function (p) { return { id: p.id, label: p.name, sub: p.subtitle, tag: p.tag, tint: p.tint, tintText: p.tintText, selected: p.id === s.calcProductId }; })
         }) + '</div>' +
       concBlock + sludgeBlock +
+      (function () {
+        var dw = v.doseWin;
+        if (!dw) return '';
+        var msg = dw.status === 'within'
+          ? 'sits <b>within</b> the window — a good baseline; bracket in a jar test to see if a lower dose still performs.'
+          : (dw.status === 'above'
+            ? 'is <b>above</b> the window — possible overdose (wasted product, risk of re-stabilising solids). Run a bracketing jar test downward.'
+            : 'is <b>below</b> the window — may be underdosing. Run a bracketing jar test upward before changing anything.');
+        var ok = dw.status === 'within';
+        return '<div style="margin-top:10px;background:' + (ok ? '#ECF7F3' : '#FBF6EC') + ';border:1px solid ' + (ok ? '#B8E0D3' : '#EBD9BC') + ';border-radius:12px;padding:11px 13px;font-size:12.5px;line-height:1.55;color:' + (ok ? '#17564C' : '#6B5A38') + ';">' +
+          '<b>' + esc(dw.name) + '</b> — typical window <b style="font-family:\'IBM Plex Mono\';">' + dw.lo + '–' + dw.hi + ' ' + dw.unit + '</b> ' + vbadge(dw.verified) + '. The entered dose (' + dw.val + ') ' + msg + '</div>';
+      })() +
       '<div style="margin-top:14px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
         '<div style="font-size:12.5px;font-weight:700;color:#4B564F;margin-bottom:10px;">Make-down solution</div>' +
         '<div style="display:flex;background:#EEEAE1;border-radius:10px;padding:3px;gap:3px;margin-bottom:11px;">' +
@@ -625,7 +644,12 @@
           '<div><div style="font-size:11.5px;font-weight:600;color:#6B776F;margin-bottom:4px;">Jar volume</div><div style="position:relative;"><input inputmode="decimal" data-set="jarVol" data-key="jarVol" value="' + esc(s.jarVol) + '" style="width:100%;background:#FBF9F4;border:1px solid #D8D2C4;border-radius:10px;padding:11px 40px 11px 11px;font-size:15px;font-family:\'IBM Plex Mono\';font-weight:600;"><span style="position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:12px;color:#94A099;font-weight:600;">mL</span></div></div>' +
           '<div><div style="font-size:11.5px;font-weight:600;color:#6B776F;margin-bottom:4px;">Stock strength</div><div style="position:relative;"><input inputmode="decimal" data-set="stockPct" data-key="stockPct" value="' + esc(s.stockPct) + '" style="width:100%;background:#FBF9F4;border:1px solid #D8D2C4;border-radius:10px;padding:11px 32px 11px 11px;font-size:15px;font-family:\'IBM Plex Mono\';font-weight:600;"><span style="position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:12px;color:#94A099;font-weight:600;">%</span></div></div>' +
         '</div>' +
-        '<div style="margin-top:10px;background:#ECF7F3;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#17564C;line-height:1.5;">' + esc(v.stockPrep) + '</div></div>' +
+        '<div style="margin-top:10px;background:#ECF7F3;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#17564C;line-height:1.5;">' + esc(v.stockPrep) + '</div>' +
+        '<div style="margin-top:12px;"><div style="font-size:11.5px;font-weight:600;color:#6B776F;margin-bottom:4px;">Optimisation retest — current full-scale dose</div>' +
+          '<div style="display:flex;gap:8px;">' +
+            '<div style="position:relative;flex:1;"><input inputmode="decimal" data-set="jarCurrentDose" data-key="jarCurrentDose" value="' + esc(s.jarCurrentDose) + '" placeholder="e.g. 5" style="width:100%;background:#FBF9F4;border:1px solid #D8D2C4;border-radius:10px;padding:11px 44px 11px 11px;font-size:15px;font-family:\'IBM Plex Mono\';font-weight:600;"><span style="position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:11px;color:#94A099;font-weight:600;">mg/L</span></div>' +
+            '<button data-act="bracketJars" style="flex-shrink:0;border:1px solid #0C8577;background:#FFF;color:#0C8577;border-radius:10px;padding:0 13px;font-size:12.5px;font-weight:700;cursor:pointer;">Bracket 50–150%</button></div>' +
+          '<div style="margin-top:6px;font-size:11px;color:#94A099;line-height:1.45;">Sets the jars to 50 / 75 / 100 / 125 / 150% of what the plant doses today — the standard series for troubleshooting or trimming an existing programme.</div></div></div>' +
       '<div style="margin-top:15px;display:flex;align-items:center;justify-content:space-between;"><div style="font-size:13px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:#6B776F;">Jars</div><div style="font-size:11px;color:#94A099;">tap ◎ to mark the winner</div></div>' +
       '<div style="margin-top:9px;display:flex;flex-direction:column;gap:10px;">' + jarRowsHtml + '</div>' +
       '<div style="margin-top:11px;display:flex;gap:9px;"><button data-act="addJar" style="flex:1;border:1px solid #D8D2C4;background:#FFF;cursor:pointer;border-radius:11px;padding:11px;font-size:13.5px;font-weight:700;color:#16211F;">+ Add jar</button><button data-act="removeJar" style="flex:1;border:1px solid #D8D2C4;background:#FFF;cursor:pointer;border-radius:11px;padding:11px;font-size:13.5px;font-weight:700;color:#6B776F;">– Remove last</button></div>' +
@@ -693,12 +717,15 @@
       '<div style="display:flex;gap:9px;"><button data-act="cancelClient" style="flex:1;border:1px solid #35453F;background:none;cursor:pointer;color:#9FB0AA;border-radius:11px;padding:12px;font-size:14px;font-weight:700;">Cancel</button><button data-act="confirmClient" style="flex:2;border:none;cursor:pointer;background:#0C8577;color:#FFF;border-radius:11px;padding:12px;font-size:14px;font-weight:700;">Save client</button></div></div>') : '';
     var listHtml = v.hasClients ? ('<div style="margin-top:14px;display:flex;flex-direction:column;gap:10px;">' + v.clients.map(function (c) {
       var testLine = c.hasTests ? '<div style="margin-top:8px;display:flex;align-items:center;gap:6px;font-size:12px;color:#0C8577;font-weight:600;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#0C8577" stroke-width="2"><path d="M9 2h6M8 2v6.5L4.5 16A3 3 0 0 0 7.2 20h9.6a3 3 0 0 0 2.7-3.5L16 8.5V2"/></svg>' + esc(c.testLabel) + '</div>' : '';
+      var chipsLine = c.hasCalc ? '<div style="margin-top:11px;display:flex;flex-wrap:wrap;gap:6px;"><div style="background:#F0F6F3;border-radius:8px;padding:5px 9px;font-size:12px;font-weight:600;color:#17564C;">' + esc(c.chip1) + '</div><div style="background:#F0F6F3;border-radius:8px;padding:5px 9px;font-size:12px;font-weight:600;color:#17564C;">' + esc(c.chip2) + '</div><div style="background:#F0F6F3;border-radius:8px;padding:5px 9px;font-size:12px;font-weight:600;color:#17564C;">' + esc(c.chip3) + '</div></div>' : '';
+      var readingsLine = c.nReadings ? ('<div style="margin-top:9px;display:flex;flex-direction:column;gap:5px;">' + c.readings.map(function (r) {
+        return '<div style="background:#FBF9F4;border:1px solid #EFEBE2;border-radius:9px;padding:7px 10px;font-size:11.5px;color:#4B564F;line-height:1.45;"><span style="font-family:\'IBM Plex Mono\';font-weight:600;color:#0C8577;">☰</span> ' + esc(r) + '</div>';
+      }).join('') + (c.nReadings > 2 ? '<div style="font-size:11px;color:#94A099;padding-left:2px;">+ ' + (c.nReadings - 2) + ' earlier reading set' + (c.nReadings - 2 === 1 ? '' : 's') + '</div>' : '') + '</div>') : '';
+      var loadBtn = c.hasCalc ? '<button data-act="loadClient" data-id="' + esc(c.id) + '" style="margin-top:12px;width:100%;border:1px solid #0C8577;cursor:pointer;background:#FFF;color:#0C8577;border-radius:11px;padding:11px;font-size:14px;font-weight:700;">Load into calculator</button>' : '';
       return '<div style="background:#FFF;border:1px solid #E2DDD0;border-radius:15px;padding:14px 15px;">' +
         '<div style="display:flex;justify-content:space-between;align-items:flex-start;"><div style="flex:1;min-width:0;"><div style="font-size:16px;font-weight:700;">' + esc(c.name) + '</div><div style="font-size:12.5px;color:#6B776F;margin-top:1px;">' + esc(c.site) + '</div></div>' +
         '<button data-act="deleteClient" data-id="' + esc(c.id) + '" style="border:none;background:none;cursor:pointer;padding:4px;"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#C0574A" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button></div>' +
-        '<div style="margin-top:11px;display:flex;flex-wrap:wrap;gap:6px;"><div style="background:#F0F6F3;border-radius:8px;padding:5px 9px;font-size:12px;font-weight:600;color:#17564C;">' + esc(c.chip1) + '</div><div style="background:#F0F6F3;border-radius:8px;padding:5px 9px;font-size:12px;font-weight:600;color:#17564C;">' + esc(c.chip2) + '</div><div style="background:#F0F6F3;border-radius:8px;padding:5px 9px;font-size:12px;font-weight:600;color:#17564C;">' + esc(c.chip3) + '</div></div>' +
-        testLine +
-        '<button data-act="loadClient" data-id="' + esc(c.id) + '" style="margin-top:12px;width:100%;border:1px solid #0C8577;cursor:pointer;background:#FFF;color:#0C8577;border-radius:11px;padding:11px;font-size:14px;font-weight:700;">Load into calculator</button></div>';
+        chipsLine + readingsLine + testLine + loadBtn + '</div>';
     }).join('') + '</div>') : '';
     var empty = v.noClients ? '<div style="margin-top:14px;background:#FBF9F4;border:1px dashed #D8D2C4;border-radius:14px;padding:18px;font-size:13px;color:#6B776F;line-height:1.5;text-align:center;">No clients yet. Go to the Dosing Calc, enter a site\'s flow and product, and tap <b style="color:#16211F">Save as client</b>.</div>' : '';
     return '<div style="padding:22px 18px 30px;animation:fadeUp .3s ease;">' +
@@ -824,13 +851,42 @@
         '<div style="margin-top:8px;font-size:11px;color:#94A099;line-height:1.45;">Stock at 0.1% w/v = 1 mg active per mL. Dose basis is dry solids, so the answer is comparable across slurry concentrations.</div></div>';
     }
 
+    // Site readings — every playbook. Values come from the plant visit and can
+    // be saved against a client to build site history over time.
+    var readingsHtml = '';
+    if (g.fields && g.fields.length) {
+      var fieldCells = g.fields.map(function (f) {
+        var key = g.id + ':' + f.k;
+        var val = s.guideReadings[key] || '';
+        return '<div><div style="font-size:11.5px;font-weight:600;color:#6B776F;margin-bottom:4px;">' + esc(f.label) + '</div>' +
+          '<div style="position:relative;"><input inputmode="decimal" data-actinput="onGuideReading" data-f="' + esc(key) + '" data-key="' + esc(key) + '" value="' + esc(val) + '" placeholder="—" style="width:100%;background:#FBF9F4;border:1px solid #D8D2C4;border-radius:10px;padding:11px ' + (f.u ? '58' : '11') + 'px 11px 11px;font-size:15px;font-family:\'IBM Plex Mono\';font-weight:600;">' + (f.u ? '<span style="position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:10.5px;color:#94A099;font-weight:600;">' + esc(f.u) + '</span>' : '') + '</div></div>';
+      }).join('');
+      var computedLine = '';
+      if (g.id === 'sewage') {
+        var ct = parseFloat(s.guideReadings['sewage:codt']), cf = parseFloat(s.guideReadings['sewage:codf']);
+        if (isFinite(ct) && isFinite(cf)) {
+          var pc = ct - cf;
+          computedLine = pc >= 0
+            ? '<div style="margin-top:10px;background:#ECF7F3;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#17564C;line-height:1.5;"><b>Particulate COD ≈ ' + App.fmt(pc, 0) + ' mg/L</b> (total − filtered) — the fraction coagulation captures readily.</div>'
+            : '<div style="margin-top:10px;background:#FBEBE7;border:1px solid #E9C4B9;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#8A3A24;line-height:1.5;">Filtered COD exceeds total COD — recheck one of the two readings.</div>';
+        }
+      }
+      var clientOpts = '<option value="">— save to existing client —</option>' + v.clients.map(function (c) { return '<option value="' + esc(c.id) + '"' + (c.id === s.guideSaveClient ? ' selected' : '') + '>' + esc(c.name) + '</option>'; }).join('');
+      var saveRow = '<div style="margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:8px;">' +
+        '<select data-set="guideSaveClient" data-key="guideSaveClient" style="width:100%;background:#FFF;border:1px solid #D8D2C4;border-radius:10px;padding:11px 9px;font-size:13px;font-weight:600;color:#16211F;appearance:none;">' + clientOpts + '</select>' +
+        '<input data-set="guideSaveName" data-key="guideSaveName" value="' + esc(s.guideSaveName) + '" placeholder="…or new client name" style="width:100%;background:#FBF9F4;border:1px solid #D8D2C4;border-radius:10px;padding:11px;font-size:13px;font-weight:500;">' +
+        '</div>' +
+        '<button data-act="saveGuideReadings" style="margin-top:9px;width:100%;border:1px solid #0C8577;cursor:pointer;background:#FFF;color:#0C8577;border-radius:11px;padding:12px;font-size:13.5px;font-weight:700;">Save readings to client</button>' +
+        (s.guideSaved ? '<div style="margin-top:8px;background:#ECF7F3;border:1px solid #B8E0D3;border-radius:10px;padding:9px 12px;font-size:12px;color:#17564C;font-weight:600;">✓ Saved — dated ' + esc(new Date().toLocaleDateString('en-AU')) + ', see the client card.</div>' : '');
+      readingsHtml = '<div style="margin-top:12px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
+        '<div style="font-size:12.5px;font-weight:700;color:#4B564F;">Site readings</div>' +
+        '<div style="font-size:12px;color:#6B776F;line-height:1.5;margin:4px 0 11px;">From the plant visit. Save them against the client to build site history — repeat visits show what changed.</div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">' + fieldCells + '</div>' + computedLine + saveRow + '</div>';
+    }
+
     var tdiHtml = '';
     if (g.tdi) {
       var tdi = App.computeTdi();
-      function tfld(label, key, val, unit) {
-        return '<div><div style="font-size:11.5px;font-weight:600;color:#6B776F;margin-bottom:4px;">' + label + '</div>' +
-          '<div style="position:relative;"><input inputmode="decimal" data-set="' + key + '" data-key="' + key + '" value="' + esc(val) + '" placeholder="—" style="width:100%;background:#FBF9F4;border:1px solid #D8D2C4;border-radius:10px;padding:11px ' + (unit ? '58' : '11') + 'px 11px 11px;font-size:15px;font-family:\'IBM Plex Mono\';font-weight:600;">' + (unit ? '<span style="position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:10.5px;color:#94A099;font-weight:600;">' + unit + '</span>' : '') + '</div></div>';
-      }
       var flagRows = tdi.rows.map(function (r) {
         return '<div style="background:' + r.bg + ';border-radius:10px;padding:9px 12px;">' +
           '<div style="display:flex;justify-content:space-between;gap:8px;"><span style="font-size:12.5px;font-weight:700;color:' + r.fg + ';">' + esc(r.label) + '</span><span style="font-size:12px;font-weight:700;font-family:\'IBM Plex Mono\';color:' + r.fg + ';flex-shrink:0;">' + esc(r.lvl) + '</span></div>' +
@@ -838,14 +894,8 @@
       }).join('');
       tdiHtml = '<div style="margin-top:12px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
         '<div style="display:flex;align-items:center;gap:7px;"><div style="font-size:12.5px;font-weight:700;color:#4B564F;">Demand snapshot (TDI)</div>' + vbadge('example') + '</div>' +
-        '<div style="font-size:12px;color:#6B776F;line-height:1.5;margin:4px 0 11px;">Enter the raw-water panel — the snapshot flags where the chemical demand is coming from. Band thresholds are illustrative demo values; calibrate against your own jar-test history before relying on them.</div>' +
-        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">' +
-          tfld('Turbidity', 'tdiTurb', s.tdiTurb, 'NTU') +
-          tfld('UV254', 'tdiUv', s.tdiUv, '/cm') +
-          tfld('Alkalinity', 'tdiAlk', s.tdiAlk, 'mg/L CaCO₃') +
-          tfld('Raw pH', 'tdiPh', s.tdiPh, '') +
-        '</div>' +
-        (tdi.hasAny ? '<div style="margin-top:11px;display:flex;flex-direction:column;gap:7px;">' + flagRows + '</div>' : '<div style="margin-top:11px;background:#FBF9F4;border:1px dashed #D8D2C4;border-radius:10px;padding:11px 12px;font-size:12px;color:#94A099;text-align:center;">Enter at least one reading to see the flags.</div>') +
+        '<div style="font-size:12px;color:#6B776F;line-height:1.5;margin-top:4px;">Reads the site readings above and flags where the chemical demand is coming from. Band thresholds are illustrative demo values; calibrate against your own jar-test history before relying on them.</div>' +
+        (tdi.hasAny ? '<div style="margin-top:11px;display:flex;flex-direction:column;gap:7px;">' + flagRows + '</div>' : '<div style="margin-top:11px;background:#FBF9F4;border:1px dashed #D8D2C4;border-radius:10px;padding:11px 12px;font-size:12px;color:#94A099;text-align:center;">Enter turbidity, UV254, alkalinity or pH above to see the flags.</div>') +
         (tdi.summary ? '<div style="margin-top:9px;background:#16211F;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#DCE6E1;line-height:1.5;">' + esc(tdi.summary) + '</div>' : '') + '</div>';
     }
 
@@ -868,7 +918,7 @@
         '<div style="width:56px;height:56px;flex-shrink:0;border-radius:15px;background:' + esc(g.tint) + ';display:flex;align-items:center;justify-content:center;font-family:\'IBM Plex Mono\';font-weight:600;font-size:14px;color:' + esc(g.tintText) + ';">' + esc(g.tag) + '</div>' +
         '<div style="min-width:0;"><div style="font-size:20px;font-weight:800;letter-spacing:-0.02em;line-height:1.2;">' + esc(g.name) + '</div><div style="font-size:12px;color:#6B776F;margin-top:2px;">' + esc(g.mech) + '</div></div></div>' +
       '<div style="margin-top:13px;font-size:13.5px;line-height:1.55;color:#333E39;">' + esc(g.intro) + '</div>' +
-      outputsHtml + measureHtml + subsHtml + endpointsHtml + doseHtml + benchHtml + tdiHtml + cautionsHtml + linksHtml +
+      outputsHtml + measureHtml + readingsHtml + tdiHtml + subsHtml + endpointsHtml + doseHtml + benchHtml + cautionsHtml + linksHtml +
       guideSrcNote('Not a substitute for jar or bench testing.') +
     '</div>';
   };

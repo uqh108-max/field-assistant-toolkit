@@ -63,7 +63,8 @@
       npu: { model: '', brand: '', type: 'Solenoid diaphragm', maxFlow: '', maxPress: '', control: 'Digital', note: '' },
       showJarSave: false, jarSaveClient: '', jarSaveNote: '', jarSaved: false,
       guideId: null, guideChecks: {},
-      tdiTurb: '', tdiUv: '', tdiAlk: '', tdiPh: '',
+      guideReadings: {}, guideSaveClient: '', guideSaveName: '', guideSaved: false,
+      jarCurrentDose: '',
       mgSample: '500', mgSolids: '30', mgStock: '0.1', mgMl: ''
     },
 
@@ -198,8 +199,8 @@
     // Potable demand snapshot. The band thresholds are ILLUSTRATIVE demo values
     // (rendered with an EXAMPLE badge) — calibrate against site jar-test history.
     computeTdi: function () {
-      var s = this.state;
-      var t = parseFloat(s.tdiTurb), u = parseFloat(s.tdiUv), a = parseFloat(s.tdiAlk), p = parseFloat(s.tdiPh);
+      var r = this.state.guideReadings;
+      var t = parseFloat(r['potable:turb']), u = parseFloat(r['potable:uv']), a = parseFloat(r['potable:alk']), p = parseFloat(r['potable:ph']);
       var LEV = ['Low', 'Moderate', 'High'];
       var COL = [
         { fg: '#2C7A45', bg: '#EAF5EC' },
@@ -251,6 +252,26 @@
       };
     },
 
+    // Compare the dose currently entered in the calc against the selected
+    // product's datasheet/typical dose window. Only compares when the product's
+    // dose unit matches the calc mode (mg/L ↔ conc, kg/t DS ↔ sludge).
+    doseWindow: function () {
+      var s = this.state;
+      var p = this.allProducts().find(function (x) { return x.id === s.calcProductId; });
+      if (!p || !p.doseRange) return null;
+      var all = String(p.doseRange).match(/[\d.]+\s*[–—-]\s*[\d.]+/g);
+      if (!all || all.length !== 1) return null; // no window, or multiple context-specific windows — don't guess which applies
+      var m = all[0].match(/([\d.]+)\s*[–—-]\s*([\d.]+)/);
+      var lo = parseFloat(m[1]), hi = parseFloat(m[2]);
+      if (!isFinite(lo) || !isFinite(hi) || hi <= 0) return null;
+      var isSludgeUnit = String(p.doseUnit || '').indexOf('dry solids') >= 0;
+      if (isSludgeUnit !== (s.calcMode === 'sludge')) return null;
+      var val = parseFloat(isSludgeUnit ? s.doseKg : s.dose);
+      if (!isFinite(val) || val <= 0) return null;
+      var status = val < lo ? 'below' : (val > hi ? 'above' : 'within');
+      return { lo: lo, hi: hi, val: val, status: status, unit: isSludgeUnit ? 'kg/t DS' : 'mg/L', raw: p.doseRange, name: p.name, verified: p.verified };
+    },
+
     // ---- state plumbing -----------------------------------------------------
     setState: function (patch) { Object.assign(this.state, patch); this.render(); },
 
@@ -291,6 +312,49 @@
     guideToProducts: function (el) { App.setState({ screen: 'products', productFilter: el.dataset.v || 'all', productId: null, productQuery: '' }); },
     guideToSludgeCalc: function () { App.setState({ screen: 'calc', calcMode: 'sludge' }); },
     guideToJars: function () { App.setState({ screen: 'jars' }); },
+    onGuideReading: function (el) {
+      var g = Object.assign({}, App.state.guideReadings);
+      g[el.dataset.f] = el.value;
+      App.setState({ guideReadings: g, guideSaved: false });
+    },
+    saveGuideReadings: function () {
+      var s = App.state;
+      var pb = window.PLAYBOOKS.list.find(function (x) { return x.id === s.guideId; });
+      if (!pb || !pb.fields) return;
+      var vals = [];
+      pb.fields.forEach(function (f) {
+        var v = (s.guideReadings[pb.id + ':' + f.k] || '').trim();
+        if (v) vals.push({ label: f.label, v: v, u: f.u });
+      });
+      if (!vals.length) return;
+      var clients = s.clients.slice();
+      var cid = s.guideSaveClient;
+      if (!cid && s.guideSaveName.trim()) {
+        var nc = { id: 'c' + Date.now(), name: s.guideSaveName.trim(), site: '', readings: [] };
+        clients = [nc].concat(clients); cid = nc.id;
+      }
+      if (!cid) return;
+      var entry = { date: new Date().toLocaleDateString('en-AU'), app: pb.name, values: vals };
+      clients = clients.map(function (c) {
+        if (c.id !== cid) return c;
+        var copy = Object.assign({}, c);
+        copy.readings = [entry].concat(copy.readings || []);
+        return copy;
+      });
+      App.persist(clients);
+      App.setState({ clients: clients, guideSaved: true, guideSaveClient: cid, guideSaveName: '' });
+    },
+    // Optimisation retest: set the jars to 50–150% of the current full-scale dose.
+    bracketJars: function () {
+      var s = App.state;
+      var cur = parseFloat(s.jarCurrentDose), vol = parseFloat(s.jarVol), sp = parseFloat(s.stockPct);
+      if (!isFinite(cur) || cur <= 0 || !isFinite(vol) || vol <= 0 || !isFinite(sp) || sp <= 0) return;
+      var jars = [0.5, 0.75, 1, 1.25, 1.5].map(function (f) {
+        var ml = cur * f * vol / (10000 * sp); // inverse of jarPpm
+        return { dose: String(Math.round(ml * 100) / 100), ph: '', turb: '', floc: '' };
+      });
+      App.setState({ jars: jars, winner: null });
+    },
 
     // products
     setProductFilter: function (el) { App.setState({ productFilter: el.dataset.v }); },
