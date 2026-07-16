@@ -66,6 +66,7 @@
       guideReadings: {}, guideSaveClient: '', guideSaveName: '', guideSaved: false,
       guideProgProductId: '', guideProgPickerOpen: false, guideProgPickerQuery: '',
       guideProgDose: '', guideProgDoseUnit: 'mgL', guideProgFlow: '', guideProgFlowUnit: 'm3h',
+      guideProgFor: '',
       jarCurrentDose: '',
       mgSample: '500', mgSolids: '30', mgStock: '0.1', mgMl: ''
     },
@@ -243,8 +244,8 @@
     computeBench: function () {
       var s = this.state;
       var m = parseFloat(s.mgSample), so = parseFloat(s.mgSolids), st = parseFloat(s.mgStock), ml = parseFloat(s.mgMl);
-      var dryG = (isFinite(m) && isFinite(so)) ? m * so / 100 : NaN;      // g dry solids in the vessel
-      var activeMg = (isFinite(st) && isFinite(ml)) ? ml * st * 10 : NaN; // % w/v → mg/mL is ×10
+      var dryG = (m > 0 && so > 0) ? m * so / 100 : NaN;      // g dry solids in the vessel
+      var activeMg = (st > 0 && ml > 0) ? ml * st * 10 : NaN; // % w/v → mg/mL is ×10
       var doseGt = (isFinite(dryG) && dryG > 0 && isFinite(activeMg)) ? activeMg * 1000 / dryG : NaN;
       return {
         dryG: this.fmt(dryG, 1),
@@ -254,48 +255,70 @@
       };
     },
 
+    // Which basis a product's datasheet dose is quoted in.
+    // 'mgL' = mg/L on flow · 'kgt' = kg/t dry solids · 'gt' = g/t dry solids/substrate.
+    doseBasisOf: function (p) {
+      var c = String((p && p.doseUnit) || '').replace(/\s+/g, '').toLowerCase();
+      if (c.indexOf('dry') < 0) return 'mgL';
+      if (c.indexOf('kg/t') >= 0) return 'kgt';
+      if (c.indexOf('g/t') >= 0) return 'gt';
+      return 'kgt';
+    },
     // Window comparison against a specific product's datasheet range. `val` must
-    // already be in the product's own dose basis (mg/L or kg/t DS).
+    // already be in the product's own dose basis. Abstains rather than guesses:
+    // no comparison for comma-grouped numbers, capped/multi-context ranges
+    // ("0.25-0.5; NSF max 1.0"), or anything that isn't exactly "lo – hi".
     doseWindowFor: function (p, val) {
       if (!p || !p.doseRange || !isFinite(val) || val <= 0) return null;
-      var all = String(p.doseRange).match(/[\d.]+\s*[–—-]\s*[\d.]+/g);
-      if (!all || all.length !== 1) return null; // no window, or multiple context-specific windows — don't guess which applies
+      var str = String(p.doseRange);
+      if (str.indexOf(',') >= 0) return null;
+      var nums = str.match(/[\d.]+/g) || [];
+      var all = str.match(/[\d.]+\s*[–—-]\s*[\d.]+/g);
+      if (!all || all.length !== 1 || nums.length !== 2) return null;
       var m = all[0].match(/([\d.]+)\s*[–—-]\s*([\d.]+)/);
       var lo = parseFloat(m[1]), hi = parseFloat(m[2]);
-      if (!isFinite(lo) || !isFinite(hi) || hi <= 0) return null;
-      var isSludgeUnit = String(p.doseUnit || '').indexOf('dry solids') >= 0;
+      if (!isFinite(lo) || !isFinite(hi) || hi <= 0 || lo > hi) return null;
+      var basis = this.doseBasisOf(p);
       var status = val < lo ? 'below' : (val > hi ? 'above' : 'within');
-      return { lo: lo, hi: hi, val: val, status: status, unit: isSludgeUnit ? 'kg/t DS' : 'mg/L', raw: p.doseRange, name: p.name, verified: p.verified };
+      return { lo: lo, hi: hi, val: val, status: status, unit: { mgL: 'mg/L', kgt: 'kg/t DS', gt: 'g/t DS' }[basis], raw: p.doseRange, name: p.name, verified: p.verified, note: p.doseNote || '' };
     },
-    // Calc screen: compare the entered dose when the product's dose unit matches
-    // the calc mode (mg/L ↔ conc, kg/t DS ↔ sludge).
+    // Calc screen: compare the entered dose when the product's dose basis is
+    // reachable from the calc mode (mg/L ↔ conc; kg/t or g/t ↔ sludge).
     doseWindow: function () {
       var s = this.state;
       var p = this.allProducts().find(function (x) { return x.id === s.calcProductId; });
       if (!p) return null;
-      var isSludgeUnit = String(p.doseUnit || '').indexOf('dry solids') >= 0;
-      if (isSludgeUnit !== (s.calcMode === 'sludge')) return null;
-      return this.doseWindowFor(p, parseFloat(isSludgeUnit ? s.doseKg : s.dose));
+      var basis = this.doseBasisOf(p);
+      if (s.calcMode === 'conc') return basis === 'mgL' ? this.doseWindowFor(p, parseFloat(s.dose)) : null;
+      var v = parseFloat(s.doseKg); // sludge mode doses in kg/t DS
+      if (basis === 'kgt') return this.doseWindowFor(p, v);
+      if (basis === 'gt') return this.doseWindowFor(p, v * 1000);
+      return null;
     },
     // Current dosing programme entered in a playbook: window check + consumption.
     computeProg: function () {
       var s = this.state;
       var p = this.allProducts().find(function (x) { return x.id === s.guideProgProductId; }) || null;
       var d = parseFloat(s.guideProgDose);
+      if (!(d > 0)) d = NaN; // negatives and zero are not doses
       var basis = s.guideProgDoseUnit; // mgL | kgt | gt
       var win = null, unitMismatch = false;
       if (p && isFinite(d)) {
-        var sludgeUnit = String(p.doseUnit || '').indexOf('dry solids') >= 0;
-        var val = sludgeUnit ? (basis === 'kgt' ? d : (basis === 'gt' ? d / 1000 : NaN)) : (basis === 'mgL' ? d : NaN);
+        var pBasis = this.doseBasisOf(p);
+        var val = NaN;
+        if (basis === pBasis) val = d;
+        else if (basis === 'kgt' && pBasis === 'gt') val = d * 1000;
+        else if (basis === 'gt' && pBasis === 'kgt') val = d / 1000;
         if (isFinite(val)) win = this.doseWindowFor(p, val);
         else unitMismatch = true;
       }
       var Q = parseFloat(s.guideProgFlow) * this.flowFactor(s.guideProgFlowUnit);
+      if (!(Q > 0)) Q = NaN;
       var kgH = (basis === 'mgL' && isFinite(Q) && isFinite(d)) ? Q * d / 1000 : NaN;
       return {
         product: p, win: win, unitMismatch: unitMismatch,
         kgH: this.fmt(kgH, 2), kgDay: this.fmt(kgH * 24, 1), hasCons: isFinite(kgH),
-        canRetest: basis === 'mgL' && isFinite(d) && d > 0,
+        canRetest: basis === 'mgL' && isFinite(d),
         canSend: isFinite(d) || isFinite(Q)
       };
     },
@@ -331,9 +354,19 @@
     goGuide: function () { App.setState({ screen: 'guide', guideId: null, productId: null }); },
     openGuide: function (el) {
       var id = el.dataset.id;
-      // default dose basis per application; entered values survive navigation
-      var basis = { sludge: 'kgt', mining: 'gt' }[id] || 'mgL';
-      App.setState({ screen: 'guide', guideId: id, guideProgDoseUnit: basis, guideSaved: false });
+      var patch = { screen: 'guide', guideId: id, guideSaved: false };
+      // The programme entry belongs to one playbook (guideProgFor). Opening a
+      // DIFFERENT playbook starts fresh (value and unit reset together — never
+      // relabel an entered dose under a new unit). Re-opening the same playbook,
+      // including via the list, keeps everything — even a unit override.
+      if (id !== App.state.guideProgFor) {
+        patch.guideProgFor = id;
+        patch.guideProgProductId = ''; patch.guideProgDose = ''; patch.guideProgFlow = '';
+        patch.guideProgPickerOpen = false; patch.guideProgPickerQuery = '';
+        patch.guideProgDoseUnit = { sludge: 'kgt', mining: 'gt' }[id] || 'mgL';
+        patch.guideProgFlowUnit = 'm3h';
+      }
+      App.setState(patch);
     },
     backToGuide: function () { App.setState({ guideId: null }); },
     toggleGuideCheck: function (el) {
@@ -411,12 +444,21 @@
       if (!vals.length && !prog) return;
       var clients = s.clients.slice();
       var cid = s.guideSaveClient;
+      // a stale selection (client deleted since) must not swallow the save
+      if (cid && !clients.some(function (c) { return c.id === cid; })) cid = '';
       if (!cid && s.guideSaveName.trim()) {
         var nc = { id: 'c' + Date.now(), name: s.guideSaveName.trim(), site: '', readings: [] };
         clients = [nc].concat(clients); cid = nc.id;
       }
       if (!cid) return;
       var entry = { date: new Date().toLocaleDateString('en-AU'), app: pb.name, values: vals, prog: prog };
+      // double-tap guard: identical to the client's latest entry → don't duplicate
+      var target = clients.find(function (c) { return c.id === cid; });
+      var latest = target && target.readings && target.readings[0];
+      if (latest && JSON.stringify(latest) === JSON.stringify(entry)) {
+        App.setState({ guideSaved: true, guideSaveClient: cid });
+        return;
+      }
       clients = clients.map(function (c) {
         if (c.id !== cid) return c;
         var copy = Object.assign({}, c);
@@ -676,18 +718,29 @@
       var id = el.dataset.id;
       var clients = App.state.clients.filter(function (c) { return c.id !== id; });
       App.persist(clients);
-      App.setState({ clients: clients });
+      var patch = { clients: clients };
+      // clear any picker still pointing at the deleted client
+      if (App.state.guideSaveClient === id) patch.guideSaveClient = '';
+      if (App.state.jarSaveClient === id) patch.jarSaveClient = '';
+      App.setState(patch);
     },
     loadClient: function (el) {
       var id = el.dataset.id;
       var c = App.state.clients.find(function (x) { return x.id === id; });
       if (!c) return;
+      // readings-only client (saved from a playbook) — no calc setup to load
+      if (!c.mode) { App.setState({ screen: 'clients' }); return; }
+      var s = App.state;
       App.setState({
         screen: 'calc', productId: null,
         calcProductId: c.productId || '', calcMode: c.mode || 'conc', form: c.form || 'liquid',
-        flow: c.flow, dose: c.dose, sludgeFlow: c.sludgeFlow, ds: c.ds, doseKg: c.doseKg, sludgeDensity: c.sludgeDensity || '1.0',
+        flow: c.flow != null ? c.flow : s.flow, dose: c.dose != null ? c.dose : s.dose,
+        sludgeFlow: c.sludgeFlow != null ? c.sludgeFlow : s.sludgeFlow, ds: c.ds != null ? c.ds : s.ds,
+        doseKg: c.doseKg != null ? c.doseKg : s.doseKg, sludgeDensity: c.sludgeDensity || '1.0',
         flowUnit: c.flowUnit || 'm3h', sludgeFlowUnit: c.sludgeFlowUnit || 'm3h',
-        makedown: c.makedown, density: c.density, pumpMax: c.pumpMax
+        makedown: c.makedown != null ? c.makedown : s.makedown,
+        density: c.density != null ? c.density : s.density,
+        pumpMax: c.pumpMax != null ? c.pumpMax : s.pumpMax
       });
     }
   };

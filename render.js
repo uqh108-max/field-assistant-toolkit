@@ -529,7 +529,8 @@
             : 'is <b>below</b> the window — may be underdosing. Run a bracketing jar test upward before changing anything.');
         var ok = dw.status === 'within';
         return '<div style="margin-top:10px;background:' + (ok ? '#ECF7F3' : '#FBF6EC') + ';border:1px solid ' + (ok ? '#B8E0D3' : '#EBD9BC') + ';border-radius:12px;padding:11px 13px;font-size:12.5px;line-height:1.55;color:' + (ok ? '#17564C' : '#6B5A38') + ';">' +
-          '<b>' + esc(dw.name) + '</b> — typical window <b style="font-family:\'IBM Plex Mono\';">' + dw.lo + '–' + dw.hi + ' ' + dw.unit + '</b> ' + vbadge(dw.verified) + '. The entered dose (' + dw.val + ') ' + msg + '</div>';
+          '<b>' + esc(dw.name) + '</b> — typical window <b style="font-family:\'IBM Plex Mono\';">' + dw.lo + '–' + dw.hi + ' ' + dw.unit + '</b> ' + vbadge(dw.verified) + '. The entered dose (' + dw.val + ') ' + msg +
+          (dw.note ? '<div style="margin-top:6px;font-size:11px;opacity:.8;line-height:1.45;">Datasheet basis: ' + esc(dw.note) + '</div>' : '') + '</div>';
       })() +
       '<div style="margin-top:14px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
         '<div style="font-size:12.5px;font-weight:700;color:#4B564F;margin-bottom:10px;">Make-down solution</div>' +
@@ -908,7 +909,8 @@
         var wmsg = wok ? 'sits <b>within</b> the datasheet window — a fair baseline; a bracketing retest shows if less still performs.'
           : (w.status === 'above' ? 'is <b>above</b> the datasheet window — possible overdose (wasted product, risk of re-stabilising solids). Retest downward.'
             : 'is <b>below</b> the datasheet window — may be underdosing. Retest upward before concluding the product has failed.');
-        winHtml = '<div style="margin-top:10px;background:' + (wok ? '#ECF7F3' : '#FBF6EC') + ';border:1px solid ' + (wok ? '#B8E0D3' : '#EBD9BC') + ';border-radius:10px;padding:10px 12px;font-size:12.5px;line-height:1.55;color:' + (wok ? '#17564C' : '#6B5A38') + ';"><b>' + esc(w.name) + '</b> — typical window <b style="font-family:\'IBM Plex Mono\';">' + w.lo + '–' + w.hi + ' ' + w.unit + '</b> ' + vbadge(w.verified) + '. Their rate (' + w.val + ') ' + wmsg + '</div>';
+        winHtml = '<div style="margin-top:10px;background:' + (wok ? '#ECF7F3' : '#FBF6EC') + ';border:1px solid ' + (wok ? '#B8E0D3' : '#EBD9BC') + ';border-radius:10px;padding:10px 12px;font-size:12.5px;line-height:1.55;color:' + (wok ? '#17564C' : '#6B5A38') + ';"><b>' + esc(w.name) + '</b> — typical window <b style="font-family:\'IBM Plex Mono\';">' + w.lo + '–' + w.hi + ' ' + w.unit + '</b> ' + vbadge(w.verified) + '. Their rate (' + (w.val === parseFloat(s.guideProgDose) ? w.val : w.val + ' ' + w.unit + ' equivalent') + ') ' + wmsg +
+          (w.note ? '<div style="margin-top:6px;font-size:11px;opacity:.8;line-height:1.45;">Datasheet basis: ' + esc(w.note) + '</div>' : '') + '</div>';
       } else if (prog.unitMismatch) {
         winHtml = '<div style="margin-top:10px;background:#FBF9F4;border:1px dashed #D8D2C4;border-radius:10px;padding:9px 12px;font-size:11.5px;color:#94A099;line-height:1.5;">The entered dose unit doesn’t match this product’s datasheet basis (' + esc((prog.product || {}).doseUnit || '') + ') — no window comparison shown.</div>';
       }
@@ -1029,7 +1031,7 @@
     }, true);
     // keep the mobile picker sheet fitted above the on-screen keyboard as it opens/closes
     if (window.visualViewport) {
-      var onVV = function () { if (self.state.productPickerOpen || self.state.calcPumpPickerOpen || self.state.jarProductPickerOpen) self.sizeMobileSheet(); };
+      var onVV = function () { if (self.state.productPickerOpen || self.state.calcPumpPickerOpen || self.state.jarProductPickerOpen || self.state.guideProgPickerOpen) self.sizeMobileSheet(); };
       window.visualViewport.addEventListener('resize', onVV);
       window.visualViewport.addEventListener('scroll', onVV);
     }
