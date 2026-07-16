@@ -1,9 +1,10 @@
 /* Field Assistant service worker — offline-first for the app shell. */
-var CACHE = 'field-assistant-v13';
+var CACHE = 'field-assistant-v14-demo';
 var CORE = [
   './',
   'index.html',
   'data.js',
+  'playbooks.js',
   'app.js',
   'render.js',
   'manifest.webmanifest',

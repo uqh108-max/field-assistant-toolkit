@@ -182,6 +182,8 @@
       screen: screen, detail: detail,
       isHome: screen === 'home', isProducts: screen === 'products' && !s.productId, isProductDetail: detail,
       isCalc: screen === 'calc', isJars: screen === 'jars', isPumps: screen === 'pumps', isClients: screen === 'clients',
+      isGuide: screen === 'guide' && !s.guideId, isGuideDetail: screen === 'guide' && !!s.guideId,
+      guide: (window.PLAYBOOKS && window.PLAYBOOKS.list.find(function (g) { return g.id === s.guideId; })) || null,
       allProducts: allProducts, allPumps: allPumps,
       product: product, productRows: productRows, noProductMatch: productRows.length === 0,
       productFilters: productFilters,
@@ -227,7 +229,8 @@
       navProductsStyle: css(this.navStyle(screen === 'products')),
       navCalcStyle: css(this.navStyle(screen === 'calc')),
       navJarsStyle: css(this.navStyle(screen === 'jars')),
-      navPumpsStyle: css(this.navStyle(screen === 'pumps'))
+      navPumpsStyle: css(this.navStyle(screen === 'pumps')),
+      navGuideStyle: css(this.navStyle(screen === 'guide'))
     };
   };
 
@@ -313,6 +316,10 @@
         card('goJars', '#FFF', '#16211F', '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#0C8577" stroke-width="1.8"><path d="M9 2h6M8 2v6.5L4.5 16A3 3 0 0 0 7.2 20h9.6a3 3 0 0 0 2.7-3.5L16 8.5V2"/><path d="M6.5 13h11"/></svg>', 'Jar Testing', 'Find the optimum dose', '#6B776F', '1px solid #E2DDD0') +
         card('goPumps', '#FFF', '#16211F', '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#0C8577" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg>', 'Dosing Pumps', 'Specs &amp; feed capacity', '#6B776F', '1px solid #E2DDD0') +
       '</div>' +
+      '<button data-act="goGuide" style="margin-top:12px;width:100%;text-align:left;cursor:pointer;background:#FFF;border:1px solid #E2DDD0;border-radius:18px;padding:15px 16px;display:flex;align-items:center;gap:13px;">' +
+        '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#0C8577" stroke-width="1.8" style="flex-shrink:0;"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>' +
+        '<span style="flex:1;min-width:0;"><span style="display:flex;align-items:center;gap:7px;"><span style="font-size:16px;font-weight:700;color:#16211F;">Field Playbooks</span><span style="background:#ECF7F3;color:#0C8577;border-radius:6px;padding:2px 7px;font-size:9.5px;font-weight:700;font-family:\'IBM Plex Mono\';letter-spacing:.04em;">NEW</span></span>' +
+        '<span style="display:block;font-size:12px;color:#6B776F;margin-top:1px;">Potable · sewage · sludge · industrial · mining</span></span>' + CHEV + '</button>' +
       '<div style="margin-top:24px;display:flex;align-items:center;justify-content:space-between;">' +
         '<div style="font-size:13px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#6B776F;">Saved clients</div>' +
         '<button data-act="goClients" style="border:none;background:none;color:#0C8577;font-size:12.5px;font-weight:600;cursor:pointer;">Manage</button></div>' +
@@ -702,6 +709,170 @@
     '</div>';
   };
 
+  // ============================ GUIDE (playbooks) ===========================
+  function guideSrcNote(extra) {
+    return '<div style="margin-top:16px;font-size:11px;color:#94A099;line-height:1.5;">' + esc(window.PLAYBOOKS.source) + (extra ? ' ' + extra : '') + '</div>';
+  }
+
+  App.screens.guide = function (v) {
+    var PB = window.PLAYBOOKS;
+    var chain = PB.chain.map(function (step, i) {
+      return '<span style="flex-shrink:0;background:#16211F;color:#4FE0B5;border-radius:8px;padding:6px 10px;font-family:\'IBM Plex Mono\';font-size:11px;font-weight:600;">' + esc(step) + '</span>' +
+        (i < PB.chain.length - 1 ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#94A099" stroke-width="2.4" style="flex-shrink:0;"><path d="M9 18l6-6-6-6"/></svg>' : '');
+    }).join('');
+    var cards = PB.list.map(function (g) {
+      return '<button data-act="openGuide" data-id="' + esc(g.id) + '" style="text-align:left;cursor:pointer;background:#FFF;border:1px solid #E2DDD0;border-radius:16px;padding:14px 15px;display:flex;gap:13px;align-items:center;">' +
+        '<div style="width:44px;height:44px;flex-shrink:0;border-radius:12px;background:' + esc(g.tint) + ';display:flex;align-items:center;justify-content:center;font-family:\'IBM Plex Mono\';font-weight:600;font-size:12px;color:' + esc(g.tintText) + ';">' + esc(g.tag) + '</div>' +
+        '<div style="flex:1;min-width:0;"><div style="font-size:15.5px;font-weight:700;">' + esc(g.name) + '</div>' +
+        '<div style="font-size:12px;color:#6B776F;margin-top:1px;">' + esc(g.mech) + '</div></div>' +
+        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#B4BBB4" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></button>';
+    }).join('');
+    var l2rows = PB.kit.l2.map(function (r) {
+      return '<div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid #F0EDE4;"><div style="width:118px;flex-shrink:0;font-size:12.5px;font-weight:700;color:#16211F;">' + esc(r.m) + '</div><div style="flex:1;font-size:12.5px;color:#6B776F;line-height:1.45;">' + esc(r.t) + '</div></div>';
+    }).join('');
+    return '<div style="padding:22px 18px 30px;animation:fadeUp .3s ease;">' +
+      '<div style="font-size:12px;letter-spacing:0.14em;text-transform:uppercase;color:#0C8577;font-weight:700;">Field playbooks</div>' +
+      '<div style="font-size:24px;font-weight:800;letter-spacing:-0.02em;margin:2px 0 4px;">Application Guide</div>' +
+      '<div style="font-size:13px;color:#6B776F;line-height:1.5;">Drinking water, sewage, industrial effluent and mineral slurries fail differently. Pick the application, measure the right surrogates, and let them narrow the product family and dose range — then confirm with a quick field test.</div>' +
+      '<div style="margin-top:13px;display:flex;align-items:center;gap:6px;overflow-x:auto;padding-bottom:4px;" class="scroll">' + chain + '</div>' +
+      '<div style="margin-top:12px;display:flex;flex-direction:column;gap:10px;">' + cards + '</div>' +
+      '<div style="margin-top:15px;background:#16211F;border-radius:16px;padding:16px 17px;color:#EFECE3;">' +
+        '<div style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#6E8A82;font-weight:700;">Operating rule</div>' +
+        '<div style="font-size:15px;font-weight:700;line-height:1.5;margin-top:6px;color:#4FE0B5;">' + esc(PB.rule) + '</div></div>' +
+      '<div style="margin-top:18px;font-size:13px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:#6B776F;">Field kit levels</div>' +
+      '<div style="margin-top:9px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
+        '<div style="font-size:12.5px;font-weight:700;color:#4B564F;">Level 1 — carry always</div>' +
+        '<div style="margin-top:7px;display:flex;flex-wrap:wrap;gap:6px;">' + PB.kit.l1.map(function (t) { return '<span style="background:#F0F6F3;border-radius:8px;padding:5px 9px;font-size:12px;font-weight:600;color:#17564C;">' + esc(t) + '</span>'; }).join('') + '</div></div>' +
+      '<div style="margin-top:10px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
+        '<div style="font-size:12.5px;font-weight:700;color:#4B564F;margin-bottom:4px;">Level 2 — add per application</div>' + l2rows + '</div>' +
+      '<div style="margin-top:10px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
+        '<div style="font-size:12.5px;font-weight:700;color:#4B564F;">Level 3 — occasional lab calibration</div>' +
+        '<div style="font-size:12px;color:#6B776F;line-height:1.5;margin:5px 0 7px;">Representative samples only — used to calibrate and validate the field system, not for every call.</div>' +
+        '<div style="display:flex;flex-wrap:wrap;gap:6px;">' + PB.kit.l3.map(function (t) { return '<span style="background:#FBF9F4;border:1px solid #E2DDD0;border-radius:8px;padding:5px 9px;font-size:12px;font-weight:600;color:#4B564F;">' + esc(t) + '</span>'; }).join('') + '</div></div>' +
+      guideSrcNote('') +
+    '</div>';
+  };
+
+  App.screens.guideDetail = function (v) {
+    var g = v.guide, s = App.state;
+    if (!g) return App.screens.guide(v);
+
+    var outputsHtml = g.outputs ? ('<div style="margin-top:14px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
+      '<div style="font-size:12.5px;font-weight:700;color:#4B564F;margin-bottom:8px;">What this playbook predicts</div>' +
+      '<ul style="margin:0;padding-left:18px;display:flex;flex-direction:column;gap:5px;">' + g.outputs.map(function (t) { return '<li style="font-size:13px;line-height:1.5;color:#333E39;">' + esc(t) + '</li>'; }).join('') + '</ul>' +
+      '<div style="margin-top:9px;font-size:11.5px;color:#94A099;line-height:1.45;">…then the recommendation is checked with a compact jar test — the prediction never ships on its own.</div></div>') : '';
+
+    var measureHtml = '';
+    if (g.measure && g.measure.length) {
+      var items = g.measure.map(function (m, i) {
+        var k = g.id + ':' + i;
+        var done = !!s.guideChecks[k];
+        return '<button data-act="toggleGuideCheck" data-ck="' + esc(k) + '" style="width:100%;text-align:left;border:none;background:none;cursor:pointer;padding:8px 0;display:flex;gap:10px;align-items:flex-start;border-bottom:1px solid #F0EDE4;">' +
+          '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="' + (done ? '#0C8577' : '#B4BBB4') + '" stroke-width="2" style="flex-shrink:0;margin-top:1px;"><circle cx="12" cy="12" r="9"/>' + (done ? '<path d="M8.5 12.5l2.5 2.5 4.5-5" stroke="#0C8577"/>' : '') + '</svg>' +
+          '<span style="min-width:0;"><span style="display:block;font-size:13.5px;font-weight:600;color:' + (done ? '#94A099' : '#16211F') + ';' + (done ? 'text-decoration:line-through;' : '') + '">' + esc(m.n) + '</span>' +
+          (m.why ? '<span style="display:block;font-size:11.5px;color:#94A099;line-height:1.4;">' + esc(m.why) + '</span>' : '') + '</span></button>';
+      }).join('');
+      measureHtml = '<div style="margin-top:12px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;"><div style="font-size:12.5px;font-weight:700;color:#4B564F;">Measure in the field</div><div style="font-size:11px;color:#94A099;">tap to tick off</div></div>' + items + '</div>';
+    }
+
+    var subsHtml = '';
+    if (g.subs) {
+      subsHtml = '<div style="margin-top:12px;display:flex;flex-direction:column;gap:10px;">' + g.subs.map(function (sub) {
+        return '<div style="background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
+          '<div style="font-size:14px;font-weight:700;">' + esc(sub.title) + '</div>' +
+          '<div style="margin-top:6px;font-size:12px;color:#17564C;background:#F0F6F3;border-radius:9px;padding:8px 11px;line-height:1.5;"><b>Measure:</b> ' + esc(sub.m) + '</div>' +
+          '<div style="margin-top:8px;font-size:12.5px;color:#6B776F;line-height:1.5;">' + esc(sub.note) + '</div></div>';
+      }).join('') + '</div>';
+    }
+
+    var endpointsHtml = '<div style="margin-top:12px;background:#16211F;border-radius:16px;padding:16px 17px;color:#EFECE3;">' +
+      g.endpointGroups.map(function (grp, gi) {
+        return (gi > 0 ? '<div style="margin-top:13px;padding-top:12px;border-top:1px solid #2C3B37;"></div>' : '') +
+          '<div style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#6E8A82;font-weight:700;">Confirm in the field — ' + esc(grp.title) + '</div>' +
+          '<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;">' + grp.items.map(function (t) { return '<span style="background:#202E2A;border:1px solid #35453F;border-radius:8px;padding:5px 9px;font-size:12px;font-weight:600;color:#DCE6E1;">' + esc(t) + '</span>'; }).join('') + '</div>';
+      }).join('') + '</div>';
+
+    var db = g.doseBasis;
+    var doseHtml = '<div style="margin-top:12px;background:#FBF6EC;border:1px solid #EBD9BC;border-radius:14px;padding:14px 15px;">' +
+      '<div style="font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#8A5E17;font-weight:700;">Dose basis</div>' +
+      '<div style="font-family:\'IBM Plex Mono\';font-size:17px;font-weight:600;color:#5C4A24;margin-top:5px;">' + esc(db.label) + '</div>' +
+      '<div style="font-size:12.5px;color:#6B5A38;line-height:1.55;margin-top:6px;">' + esc(db.body) + '</div>' +
+      (db.formulas ? '<div style="margin-top:9px;display:flex;flex-direction:column;gap:5px;">' + db.formulas.map(function (f) { return '<div style="background:#FFF;border:1px solid #EBD9BC;border-radius:9px;padding:8px 11px;font-family:\'IBM Plex Mono\';font-size:12px;font-weight:600;color:#5C4A24;">' + esc(f) + '</div>'; }).join('') + '</div>' : '') + '</div>';
+
+    var benchHtml = '';
+    if (g.bench) {
+      var b = App.computeBench();
+      function bfld(label, key, val, unit) {
+        return '<div><div style="font-size:11.5px;font-weight:600;color:#6B776F;margin-bottom:4px;">' + label + '</div>' +
+          '<div style="position:relative;"><input inputmode="decimal" data-set="' + key + '" data-key="' + key + '" value="' + esc(val) + '" placeholder="0" style="width:100%;background:#FBF9F4;border:1px solid #D8D2C4;border-radius:10px;padding:11px ' + (unit.length > 2 ? '52' : '38') + 'px 11px 11px;font-size:15px;font-family:\'IBM Plex Mono\';font-weight:600;"><span style="position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:11px;color:#94A099;font-weight:600;">' + unit + '</span></div></div>';
+      }
+      benchHtml = '<div style="margin-top:12px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
+        '<div style="font-size:12.5px;font-weight:700;color:#4B564F;">Bench dose calculator</div>' +
+        '<div style="font-size:12px;color:#6B776F;line-height:1.5;margin:4px 0 11px;">Dose a measuring-cylinder settling test, then convert what you added into g/t dry solids.</div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">' +
+          bfld('Slurry sample', 'mgSample', s.mgSample, 'g') +
+          bfld('Solids', 'mgSolids', s.mgSolids, '% w/w') +
+          bfld('Stock strength', 'mgStock', s.mgStock, '% w/v') +
+          bfld('Stock added', 'mgMl', s.mgMl, 'mL') +
+        '</div>' +
+        '<div style="margin-top:12px;background:#16211F;border-radius:12px;padding:13px 14px;color:#EFECE3;display:flex;gap:18px;">' +
+          '<div><div style="font-size:10.5px;color:#6E8A82;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;">Dry solids</div><div style="font-size:16px;font-weight:600;font-family:\'IBM Plex Mono\';color:#EFECE3;">' + esc(b.dryG) + ' g</div></div>' +
+          '<div><div style="font-size:10.5px;color:#6E8A82;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;">Active polymer</div><div style="font-size:16px;font-weight:600;font-family:\'IBM Plex Mono\';color:#EFECE3;">' + esc(b.activeMg) + ' mg</div></div>' +
+          '<div><div style="font-size:10.5px;color:#6E8A82;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;">Dose</div><div style="font-size:16px;font-weight:600;font-family:\'IBM Plex Mono\';color:#4FE0B5;">' + esc(b.doseGt) + ' g/t</div></div>' +
+        '</div>' +
+        '<div style="margin-top:8px;font-size:11px;color:#94A099;line-height:1.45;">Stock at 0.1% w/v = 1 mg active per mL. Dose basis is dry solids, so the answer is comparable across slurry concentrations.</div></div>';
+    }
+
+    var tdiHtml = '';
+    if (g.tdi) {
+      var tdi = App.computeTdi();
+      function tfld(label, key, val, unit) {
+        return '<div><div style="font-size:11.5px;font-weight:600;color:#6B776F;margin-bottom:4px;">' + label + '</div>' +
+          '<div style="position:relative;"><input inputmode="decimal" data-set="' + key + '" data-key="' + key + '" value="' + esc(val) + '" placeholder="—" style="width:100%;background:#FBF9F4;border:1px solid #D8D2C4;border-radius:10px;padding:11px ' + (unit ? '58' : '11') + 'px 11px 11px;font-size:15px;font-family:\'IBM Plex Mono\';font-weight:600;">' + (unit ? '<span style="position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:10.5px;color:#94A099;font-weight:600;">' + unit + '</span>' : '') + '</div></div>';
+      }
+      var flagRows = tdi.rows.map(function (r) {
+        return '<div style="background:' + r.bg + ';border-radius:10px;padding:9px 12px;">' +
+          '<div style="display:flex;justify-content:space-between;gap:8px;"><span style="font-size:12.5px;font-weight:700;color:' + r.fg + ';">' + esc(r.label) + '</span><span style="font-size:12px;font-weight:700;font-family:\'IBM Plex Mono\';color:' + r.fg + ';flex-shrink:0;">' + esc(r.lvl) + '</span></div>' +
+          '<div style="font-size:11.5px;color:' + r.fg + ';opacity:.85;line-height:1.45;margin-top:2px;">' + esc(r.note) + '</div></div>';
+      }).join('');
+      tdiHtml = '<div style="margin-top:12px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
+        '<div style="display:flex;align-items:center;gap:7px;"><div style="font-size:12.5px;font-weight:700;color:#4B564F;">Demand snapshot (TDI)</div>' + vbadge('example') + '</div>' +
+        '<div style="font-size:12px;color:#6B776F;line-height:1.5;margin:4px 0 11px;">Enter the raw-water panel — the snapshot flags where the chemical demand is coming from. Band thresholds are illustrative demo values; calibrate against your own jar-test history before relying on them.</div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">' +
+          tfld('Turbidity', 'tdiTurb', s.tdiTurb, 'NTU') +
+          tfld('UV254', 'tdiUv', s.tdiUv, '/cm') +
+          tfld('Alkalinity', 'tdiAlk', s.tdiAlk, 'mg/L CaCO₃') +
+          tfld('Raw pH', 'tdiPh', s.tdiPh, '') +
+        '</div>' +
+        (tdi.hasAny ? '<div style="margin-top:11px;display:flex;flex-direction:column;gap:7px;">' + flagRows + '</div>' : '<div style="margin-top:11px;background:#FBF9F4;border:1px dashed #D8D2C4;border-radius:10px;padding:11px 12px;font-size:12px;color:#94A099;text-align:center;">Enter at least one reading to see the flags.</div>') +
+        (tdi.summary ? '<div style="margin-top:9px;background:#16211F;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#DCE6E1;line-height:1.5;">' + esc(tdi.summary) + '</div>' : '') + '</div>';
+    }
+
+    var cautionsHtml = (g.cautions && g.cautions.length) ? ('<div style="margin-top:12px;display:flex;flex-direction:column;gap:8px;">' + g.cautions.map(function (t) {
+      return '<div style="background:#FBF6EC;border:1px solid #EBD9BC;border-radius:12px;padding:11px 13px;font-size:12.5px;line-height:1.5;color:#6B5A38;"><b style="color:#8A5E17;">Caution.</b> ' + esc(t) + '</div>';
+    }).join('') + '</div>') : '';
+
+    var productBtns = (g.products || []).map(function (p) {
+      return '<button data-act="guideToProducts" data-v="' + esc(p.filter) + '" style="width:100%;border:1px solid #0C8577;cursor:pointer;background:#FFF;color:#0C8577;border-radius:13px;padding:13px;font-size:14px;font-weight:700;">' + esc(p.label) + ' →</button>';
+    }).join('');
+    var actionBtns = (g.actions || []).map(function (a) {
+      return '<button data-act="' + esc(a.act) + '" style="width:100%;border:none;cursor:pointer;background:#0C8577;color:#FFF;border-radius:13px;padding:13px;font-size:14px;font-weight:700;">' + esc(a.label) + '</button>';
+    }).join('');
+    var linksHtml = (productBtns || actionBtns) ? '<div style="margin-top:14px;display:flex;flex-direction:column;gap:9px;">' + actionBtns + productBtns + '</div>' : '';
+
+    return '<div style="padding:18px 18px 30px;animation:fadeUp .3s ease;">' +
+      '<button data-act="backToGuide" style="border:none;background:none;cursor:pointer;color:#0C8577;font-size:13.5px;font-weight:600;display:flex;align-items:center;gap:5px;margin-bottom:14px;">' +
+        '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#0C8577" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg> Playbooks</button>' +
+      '<div style="display:flex;gap:14px;align-items:center;">' +
+        '<div style="width:56px;height:56px;flex-shrink:0;border-radius:15px;background:' + esc(g.tint) + ';display:flex;align-items:center;justify-content:center;font-family:\'IBM Plex Mono\';font-weight:600;font-size:14px;color:' + esc(g.tintText) + ';">' + esc(g.tag) + '</div>' +
+        '<div style="min-width:0;"><div style="font-size:20px;font-weight:800;letter-spacing:-0.02em;line-height:1.2;">' + esc(g.name) + '</div><div style="font-size:12px;color:#6B776F;margin-top:2px;">' + esc(g.mech) + '</div></div></div>' +
+      '<div style="margin-top:13px;font-size:13.5px;line-height:1.55;color:#333E39;">' + esc(g.intro) + '</div>' +
+      outputsHtml + measureHtml + subsHtml + endpointsHtml + doseHtml + benchHtml + tdiHtml + cautionsHtml + linksHtml +
+      guideSrcNote('Not a substitute for jar or bench testing.') +
+    '</div>';
+  };
+
   function navBtn(act, style, svg, label) {
     return '<button data-act="' + act + '" style="' + style + '">' + svg + '<span style="font-size:10.5px;font-weight:600;">' + label + '</span></button>';
   }
@@ -710,7 +881,8 @@
       navBtn('goProducts', v.navProductsStyle, '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M6 2v6l-4 8a3 3 0 0 0 3 4h10a3 3 0 0 0 3-4l-4-8V2"/><path d="M6 2h8"/></svg>', 'Products') +
       navBtn('goCalc', v.navCalcStyle, '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M8 6h8M8 10h8M8 14h3M15 14v4"/></svg>', 'Dose') +
       navBtn('goJars', v.navJarsStyle, '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M9 2h6M8 2v6.5L4.5 16A3 3 0 0 0 7.2 20h9.6a3 3 0 0 0 2.7-3.5L16 8.5V2"/></svg>', 'Jars') +
-      navBtn('goPumps', v.navPumpsStyle, '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg>', 'Pumps');
+      navBtn('goPumps', v.navPumpsStyle, '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg>', 'Pumps') +
+      navBtn('goGuide', v.navGuideStyle, '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>', 'Guide');
   };
 
   // ============================ MOUNT / RENDER ==============================
@@ -801,6 +973,8 @@
     else if (v.isJars) html = this.screens.jars(v);
     else if (v.isPumps) html = this.screens.pumps(v);
     else if (v.isClients) html = this.screens.clients(v);
+    else if (v.isGuideDetail) html = this.screens.guideDetail(v);
+    else if (v.isGuide) html = this.screens.guide(v);
     else html = this.screens.home(v);
 
     this.$screen.innerHTML = html;

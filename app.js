@@ -61,7 +61,10 @@
       np: { name: '', brand: '', type: 'Flocculant', charge: '', form: 'Powder', doseRange: '', doseUnit: 'mg/L on flow', density: '', makedown: '', ageing: '', application: '', makeup: '' },
       showPumpForm: false,
       npu: { model: '', brand: '', type: 'Solenoid diaphragm', maxFlow: '', maxPress: '', control: 'Digital', note: '' },
-      showJarSave: false, jarSaveClient: '', jarSaveNote: '', jarSaved: false
+      showJarSave: false, jarSaveClient: '', jarSaveNote: '', jarSaved: false,
+      guideId: null, guideChecks: {},
+      tdiTurb: '', tdiUv: '', tdiAlk: '', tdiPh: '',
+      mgSample: '500', mgSolids: '30', mgStock: '0.1', mgMl: ''
     },
 
     PRODUCTS: DATA.products,
@@ -191,6 +194,63 @@
       };
     },
 
+    // ---- Guide tab maths ------------------------------------------------------
+    // Potable demand snapshot. The band thresholds are ILLUSTRATIVE demo values
+    // (rendered with an EXAMPLE badge) — calibrate against site jar-test history.
+    computeTdi: function () {
+      var s = this.state;
+      var t = parseFloat(s.tdiTurb), u = parseFloat(s.tdiUv), a = parseFloat(s.tdiAlk), p = parseFloat(s.tdiPh);
+      var LEV = ['Low', 'Moderate', 'High'];
+      var COL = [
+        { fg: '#2C7A45', bg: '#EAF5EC' },
+        { fg: '#8A5E17', bg: '#FBF6EC' },
+        { fg: '#8A3A24', bg: '#FBEBE7' }
+      ];
+      function band(v, lo, hi) { return !isFinite(v) ? null : (v < lo ? 0 : (v <= hi ? 1 : 2)); }
+      var rows = [];
+      var nom = band(u, 0.05, 0.15);
+      if (nom != null) rows.push({ label: 'Organics / NOM (UV254)', lvl: LEV[nom], fg: COL[nom].fg, bg: COL[nom].bg, note: [
+        'Little dissolved-organic demand indicated.',
+        'NOM present — expect meaningful coagulant demand for organics.',
+        'Organics likely drive the dose — check colour/DOC; a higher-basicity coagulant may suit.'
+      ][nom] });
+      var part = band(t, 10, 50);
+      if (part != null) rows.push({ label: 'Particle load (turbidity)', lvl: LEV[part], fg: COL[part].fg, bg: COL[part].bg, note: [
+        'Low particle loading.',
+        'Moderate particle loading.',
+        'High solids — sweep flocculation likely; judge settled AND filtered turbidity.'
+      ][part] });
+      if (isFinite(a)) {
+        var ab = a < 40 ? 2 : (a <= 120 ? 0 : 0);
+        rows.push({ label: 'Buffering (alkalinity)', lvl: a < 40 ? 'Poor' : (a <= 120 ? 'Adequate' : 'Well buffered'), fg: COL[ab].fg, bg: COL[ab].bg, note: a < 40
+          ? 'Poorly buffered — hydrolysing coagulants will depress pH; alkalinity supplementation may be needed.'
+          : (a <= 120 ? 'Buffering adequate for typical doses.' : 'Well buffered — post-dose pH easier to hold.') });
+      }
+      if (isFinite(p)) {
+        var pb = (p >= 6.5 && p <= 8) ? 0 : 1;
+        rows.push({ label: 'Raw pH', lvl: this.fmt(p, 1), fg: COL[pb].fg, bg: COL[pb].bg, note: p < 6.5
+          ? 'Already low — watch total acid demand from the coagulant.'
+          : (p > 8 ? 'High — check the post-dose pH target; coagulant choice and dose both move it.' : 'In the usual coagulation window.') });
+      }
+      var demand = Math.max(nom == null ? -1 : nom, part == null ? -1 : part);
+      var summary = demand < 0 ? '' : 'Overall chemical demand: ' + LEV[demand].toLowerCase() + ' (example banding). Confirm with a compact multi-point jar test before recommending.';
+      return { rows: rows, summary: summary, hasAny: rows.length > 0 };
+    },
+    // Mining bench dose: sample mass + %solids + stock added → g/t dry solids.
+    computeBench: function () {
+      var s = this.state;
+      var m = parseFloat(s.mgSample), so = parseFloat(s.mgSolids), st = parseFloat(s.mgStock), ml = parseFloat(s.mgMl);
+      var dryG = (isFinite(m) && isFinite(so)) ? m * so / 100 : NaN;      // g dry solids in the vessel
+      var activeMg = (isFinite(st) && isFinite(ml)) ? ml * st * 10 : NaN; // % w/v → mg/mL is ×10
+      var doseGt = (isFinite(dryG) && dryG > 0 && isFinite(activeMg)) ? activeMg * 1000 / dryG : NaN;
+      return {
+        dryG: this.fmt(dryG, 1),
+        activeMg: this.fmt(activeMg, 1),
+        doseGt: this.fmt(doseGt, 0),
+        ok: isFinite(doseGt)
+      };
+    },
+
     // ---- state plumbing -----------------------------------------------------
     setState: function (patch) { Object.assign(this.state, patch); this.render(); },
 
@@ -217,6 +277,20 @@
     goJars: function () { App.setState({ screen: 'jars' }); },
     goPumps: function () { App.setState({ screen: 'pumps' }); },
     goClients: function () { App.setState({ screen: 'clients' }); },
+
+    // guide (field playbooks)
+    goGuide: function () { App.setState({ screen: 'guide', guideId: null, productId: null }); },
+    openGuide: function (el) { App.setState({ screen: 'guide', guideId: el.dataset.id }); },
+    backToGuide: function () { App.setState({ guideId: null }); },
+    toggleGuideCheck: function (el) {
+      var k = el.dataset.ck;
+      var g = Object.assign({}, App.state.guideChecks);
+      g[k] = !g[k];
+      App.setState({ guideChecks: g });
+    },
+    guideToProducts: function (el) { App.setState({ screen: 'products', productFilter: el.dataset.v || 'all', productId: null, productQuery: '' }); },
+    guideToSludgeCalc: function () { App.setState({ screen: 'calc', calcMode: 'sludge' }); },
+    guideToJars: function () { App.setState({ screen: 'jars' }); },
 
     // products
     setProductFilter: function (el) { App.setState({ productFilter: el.dataset.v }); },
