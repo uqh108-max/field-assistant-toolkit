@@ -1,5 +1,5 @@
 /* Field Assistant service worker — offline-first for the app shell. */
-var CACHE = 'field-assistant-v16-demo';
+var CACHE = 'field-assistant-v14';
 var CORE = [
   './',
   'index.html',
