@@ -40,10 +40,15 @@
   <script src="render.js"></script>
   <script>
     if ('serviceWorker' in navigator) {
-      // when a new version activates, reload once so a single refresh always updates
+      // when a new version activates, reload once so a single refresh always updates —
+      // unless unsaved field data (readings, programme entries, jar results) is on
+      // screen: a forced reload would destroy it. The update then lands on the next
+      // manual reload instead.
       var __reloading = false;
       navigator.serviceWorker.addEventListener('controllerchange', function () {
-        if (__reloading) return; __reloading = true; window.location.reload();
+        if (__reloading) return;
+        try { if (window.FieldAssistant && window.FieldAssistant.hasUnsavedFieldData()) return; } catch (e) {}
+        __reloading = true; window.location.reload();
       });
       window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
     }

@@ -39,6 +39,12 @@
     return '<span title="' + esc(m.title) + '" style="display:inline-block;font-family:\'IBM Plex Mono\',monospace;font-size:9px;font-weight:600;letter-spacing:.04em;padding:2px 6px;border-radius:6px;background:' + m.bg + ';color:' + m.fg + ';vertical-align:middle;">' + m.t + '</span>';
   }
 
+  // one predicate for every product picker — search behaviour can't diverge
+  function filterProducts(list, query) {
+    var qq = (query || '').trim().toLowerCase();
+    return list.filter(function (p) { return !qq || (p.name + ' ' + p.brand + ' ' + p.type + ' ' + p.charge + ' ' + (p.subtitle || '')).toLowerCase().indexOf(qq) >= 0; });
+  }
+
   // ============================ VIEW-MODEL ==================================
   App.derive = function () {
     var s = this.state;
@@ -105,19 +111,21 @@
     var pumpRows = allPumps.filter(function (p) { return !q || (p.model + ' ' + p.brand + ' ' + p.type).toLowerCase().indexOf(q) >= 0; })
       .map(function (p) { var o = Object.assign({}, p); o.removable = !!(p.ai || p.mine); return o; });
 
-    var FU = this.FLOW_UNITS;
     var clients = s.clients.map(function (c) {
-      var fu = (FU.find(function (x) { return x.v === c.flowUnit; }) || { label: 'm³/h' }).label;
-      var su = (FU.find(function (x) { return x.v === c.sludgeFlowUnit; }) || { label: 'm³/h' }).label;
+      var fu = App.flowLabel(c.flowUnit);
+      var su = App.flowLabel(c.sludgeFlowUnit);
       var nTests = s.jarTests.filter(function (x) { return x.clientId === c.id; }).length;
       var hasCalc = !!c.mode;
-      var readings = (c.readings || []).slice(0, 2).map(function (r) {
+      // preview strings render only on the clients screen — skip the string
+      // assembly on every other screen's re-render
+      var readings = screen !== 'clients' ? [] : (c.readings || []).slice(0, 2).map(function (r) {
+        var vals = r.values || []; // one malformed stored entry must not brick derive()
         var progTxt = '';
         if (r.prog) {
           progTxt = 'Dosing: ' + (r.prog.product || 'current product') + (r.prog.dose ? (' ' + r.prog.dose + ' ' + r.prog.unit) : '') + (r.prog.flow ? (' @ ' + r.prog.flow + ' ' + r.prog.flowUnit) : '');
-          if (r.values.length) progTxt += ' · ';
+          if (vals.length) progTxt += ' · ';
         }
-        return r.date + ' · ' + r.app + ' — ' + progTxt + r.values.map(function (x) { return x.label + ' ' + x.v + (x.u ? ' ' + x.u : ''); }).join(', ');
+        return r.date + ' · ' + r.app + ' — ' + progTxt + vals.map(function (x) { return x.label + ' ' + x.v + (x.u ? ' ' + x.u : ''); }).join(', ');
       });
       return {
         id: c.id, name: c.name, site: c.site || 'No site noted',
@@ -138,8 +146,8 @@
       ? 'To make this stock: dissolve ' + this.fmt(stockPctN * 10, 2) + ' g of product per 1 L of water (' + this.fmt(stockPctN * 10, 2) + ' g/L = ' + this.fmt(stockPctN * 10, 2) + ' mg/mL). Then 1 mL added to a ' + (s.jarVol || '?') + ' mL jar ≈ ' + this.fmt(this.jarPpm('1'), 2) + ' mg/L.'
       : 'Enter a stock strength to see the make-up quantity.';
 
-    var cpFu = (FU.find(function (x) { return x.v === s.flowUnit; }) || { label: 'm³/h' }).label;
-    var cpSu = (FU.find(function (x) { return x.v === s.sludgeFlowUnit; }) || { label: 'm³/h' }).label;
+    var cpFu = App.flowLabel(s.flowUnit);
+    var cpSu = App.flowLabel(s.sludgeFlowUnit);
     var calc = this.computeCalc();
     var calMl = parseFloat(s.calMl), calSec = parseFloat(s.calSec);
     var calActual = (isFinite(calMl) && isFinite(calSec) && calSec > 0) ? calMl * 3.6 / calSec : NaN;
@@ -206,20 +214,20 @@
       winnerN: winnerJar ? (s.winner + 1) : '', winnerPpm: this.fmt(winnerPpmNum, 2),
       pumpRows: pumpRows,
       noPumpMatch: pumpRows.length === 0 && s.pumpQuery.trim().length > 0 && !s.pumpLoading,
-      calc: calc, cal: cal, doseWin: this.doseWindow(),
+      calc: calc, cal: cal, doseWin: screen === 'calc' ? this.doseWindow() : null,
       calcPumpChosen: !!s.selectedCalcPumpId, calcPumpInfo: calcPumpInfo,
       productPickerOpen: s.productPickerOpen, productPickerQuery: s.productPickerQuery,
       selectedProductLabel: (allProducts.find(function (p) { return p.id === s.calcProductId; }) || {}).name || '— none / generic —',
-      filteredProducts: (function () { var qq = (s.productPickerQuery || '').trim().toLowerCase(); return allProducts.filter(function (p) { return !qq || (p.name + ' ' + p.brand + ' ' + p.type + ' ' + p.charge + ' ' + (p.subtitle || '')).toLowerCase().indexOf(qq) >= 0; }); })(),
+      filteredProducts: s.productPickerOpen ? filterProducts(allProducts, s.productPickerQuery) : [],
       calcPumpPickerOpen: s.calcPumpPickerOpen, calcPumpPickerQuery: s.calcPumpPickerQuery,
       selectedCalcPumpLabel: (function () { var pp = allPumps.find(function (x) { return x.id === s.selectedCalcPumpId; }); return pp ? (pp.model + ' — ' + pp.maxFlow) : '— select a pump —'; })(),
-      filteredCalcPumps: (function () { var qq = (s.calcPumpPickerQuery || '').trim().toLowerCase(); return allPumps.filter(function (p) { return !qq || (p.model + ' ' + p.brand + ' ' + p.type).toLowerCase().indexOf(qq) >= 0; }); })(),
+      filteredCalcPumps: (function () { if (!s.calcPumpPickerOpen) return []; var qq = (s.calcPumpPickerQuery || '').trim().toLowerCase(); return allPumps.filter(function (p) { return !qq || (p.model + ' ' + p.brand + ' ' + p.type).toLowerCase().indexOf(qq) >= 0; }); })(),
       guideProgPickerOpen: s.guideProgPickerOpen, guideProgPickerQuery: s.guideProgPickerQuery,
       selectedGuideProgLabel: (allProducts.find(function (p) { return p.id === s.guideProgProductId; }) || {}).name || '— select their product —',
-      filteredGuideProgProducts: (function () { var qq = (s.guideProgPickerQuery || '').trim().toLowerCase(); return allProducts.filter(function (p) { return !qq || (p.name + ' ' + p.brand + ' ' + p.type + ' ' + p.charge + ' ' + (p.subtitle || '')).toLowerCase().indexOf(qq) >= 0; }); })(),
+      filteredGuideProgProducts: s.guideProgPickerOpen ? filterProducts(allProducts, s.guideProgPickerQuery) : [],
       jarProductPickerOpen: s.jarProductPickerOpen, jarProductPickerQuery: s.jarProductPickerQuery,
       selectedJarProductLabel: (allProducts.find(function (p) { return p.id === s.jarProductId; }) || {}).name || '— select a product —',
-      filteredJarProducts: (function () { var qq = (s.jarProductPickerQuery || '').trim().toLowerCase(); return allProducts.filter(function (p) { return !qq || (p.name + ' ' + p.brand + ' ' + p.type + ' ' + p.charge + ' ' + (p.subtitle || '')).toLowerCase().indexOf(qq) >= 0; }); })(),
+      filteredJarProducts: s.jarProductPickerOpen ? filterProducts(allProducts, s.jarProductPickerQuery) : [],
       showFlowConv: s.flowUnit !== 'm3h' && isFinite(parseFloat(s.flow)),
       flowConverted: this.fmt(parseFloat(s.flow) * this.flowFactor(s.flowUnit), 3),
       showSludgeConv: s.sludgeFlowUnit !== 'm3h' && isFinite(parseFloat(s.sludgeFlow)),
@@ -248,6 +256,26 @@
       navGuideStyle: css(this.navStyle(screen === 'guide'))
     };
   };
+
+  // One banner for every dose-vs-datasheet-window verdict (calc + guide) — the
+  // wording, colours and the datasheet-basis footer can never drift apart.
+  // `w` is a doseWindowFor result, or {mismatch:true, name, rawUnit, note}.
+  function doseWindowBanner(w, subject) {
+    if (!w) return '';
+    var noteLine = w.note ? '<div style="margin-top:6px;font-size:11px;opacity:.8;line-height:1.45;">Datasheet basis: ' + esc(w.note) + '</div>' : '';
+    if (w.mismatch) {
+      return '<div style="margin-top:10px;background:#FBF9F4;border:1px dashed #D8D2C4;border-radius:10px;padding:9px 12px;font-size:11.5px;color:#94A099;line-height:1.5;">' +
+        subject + ' doesn’t match <b>' + esc(w.name) + '</b>’s datasheet basis (' + esc(w.rawUnit || '') + ') — no window comparison shown.' + noteLine + '</div>';
+    }
+    var ok = w.status === 'within';
+    var msg = ok ? 'sits <b>within</b> the datasheet window — a good baseline; bracket 50–150% to see if less still performs.'
+      : (w.status === 'above'
+        ? 'is <b>above</b> the datasheet window — possible overdose (wasted product, risk of re-stabilising solids). Retest downward.'
+        : 'is <b>below</b> the datasheet window — may be underdosing. Retest upward before changing anything.');
+    var shown = App.fmt(w.val, 2) + ' ' + w.unit + (w.converted ? ' equivalent' : '');
+    return '<div style="margin-top:10px;background:' + (ok ? '#ECF7F3' : '#FBF6EC') + ';border:1px solid ' + (ok ? '#B8E0D3' : '#EBD9BC') + ';border-radius:12px;padding:11px 13px;font-size:12.5px;line-height:1.55;color:' + (ok ? '#17564C' : '#6B5A38') + ';">' +
+      '<b>' + esc(w.name) + '</b> — typical window <b style="font-family:\'IBM Plex Mono\';">' + w.lo + '–' + w.hi + ' ' + w.unit + '</b> ' + vbadge(w.verified) + '. ' + subject + ' (' + esc(shown) + ') ' + msg + noteLine + '</div>';
+  }
 
   // shared field/icon fragments
   var CHEV = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0C8577" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>';
@@ -388,7 +416,7 @@
         fld('charge', np.charge, 'Charge (e.g. Cationic high)') +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;">' +
           fld('doseRange', np.doseRange, 'Dose range e.g. 1 – 10', 'background:#202E2A;border:1px solid #35453F;border-radius:10px;padding:11px;font-size:13.5px;color:#EFECE3;') +
-          '<select data-actchange="onNpField" data-f="doseUnit" data-key="np-doseUnit" style="background:#202E2A;border:1px solid #35453F;border-radius:10px;padding:11px;font-size:12.5px;color:#FFF;appearance:none;">' + optionTags([{ v: 'mg/L on flow' }, { v: 'kg / t dry solids' }], np.doseUnit, 'v', 'v') + '</select>' +
+          '<select data-actchange="onNpField" data-f="doseUnit" data-key="np-doseUnit" style="background:#202E2A;border:1px solid #35453F;border-radius:10px;padding:11px;font-size:12.5px;color:#FFF;appearance:none;">' + optionTags([{ v: 'mg/L on flow' }, { v: 'kg / t dry solids' }, { v: 'g / t dry solids' }], np.doseUnit, 'v', 'v') + '</select>' +
         '</div>' +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;">' +
           fld('density', np.density, 'Density kg/L', 'background:#202E2A;border:1px solid #35453F;border-radius:10px;padding:11px;font-size:13.5px;color:#EFECE3;') +
@@ -519,19 +547,7 @@
           items: v.filteredProducts.map(function (p) { return { id: p.id, label: p.name, sub: p.subtitle, tag: p.tag, tint: p.tint, tintText: p.tintText, selected: p.id === s.calcProductId }; })
         }) + '</div>' +
       concBlock + sludgeBlock +
-      (function () {
-        var dw = v.doseWin;
-        if (!dw) return '';
-        var msg = dw.status === 'within'
-          ? 'sits <b>within</b> the window — a good baseline; bracket in a jar test to see if a lower dose still performs.'
-          : (dw.status === 'above'
-            ? 'is <b>above</b> the window — possible overdose (wasted product, risk of re-stabilising solids). Run a bracketing jar test downward.'
-            : 'is <b>below</b> the window — may be underdosing. Run a bracketing jar test upward before changing anything.');
-        var ok = dw.status === 'within';
-        return '<div style="margin-top:10px;background:' + (ok ? '#ECF7F3' : '#FBF6EC') + ';border:1px solid ' + (ok ? '#B8E0D3' : '#EBD9BC') + ';border-radius:12px;padding:11px 13px;font-size:12.5px;line-height:1.55;color:' + (ok ? '#17564C' : '#6B5A38') + ';">' +
-          '<b>' + esc(dw.name) + '</b> — typical window <b style="font-family:\'IBM Plex Mono\';">' + dw.lo + '–' + dw.hi + ' ' + dw.unit + '</b> ' + vbadge(dw.verified) + '. The entered dose (' + dw.val + ') ' + msg +
-          (dw.note ? '<div style="margin-top:6px;font-size:11px;opacity:.8;line-height:1.45;">Datasheet basis: ' + esc(dw.note) + '</div>' : '') + '</div>';
-      })() +
+      doseWindowBanner(v.doseWin, v.doseWin && v.doseWin.mismatch ? 'The ' + (isConc ? 'mg/L' : 'kg/t DS') + ' entry' : 'The entered dose') +
       '<div style="margin-top:14px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
         '<div style="font-size:12.5px;font-weight:700;color:#4B564F;margin-bottom:10px;">Make-down solution</div>' +
         '<div style="display:flex;background:#EEEAE1;border-radius:10px;padding:3px;gap:3px;margin-bottom:11px;">' +
@@ -614,10 +630,17 @@
           '<div style="margin-left:auto;text-align:right;"><span style="font-family:\'IBM Plex Mono\';font-size:16px;font-weight:600;color:#0C8577;">' + esc(j.ppm) + '</span><span style="font-size:11px;color:#94A099;font-weight:600;"> mg/L</span></div></div>' +
         '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:7px;">' + cell('Dose mL', 'dose', j.dose) + cell('pH', 'ph', j.ph) + cell('NTU', 'turb', j.turb) + cell('Floc', 'floc', j.floc, '—') + '</div></div>';
     }).join('');
+    // A jar mg/L is only a full-scale dose when the product doses mg/L on flow.
+    // Dry-tonne-basis products (g/t · kg/t DS) get an explanation, not a send
+    // button — there is no conversion without the plant's solids balance.
+    var jarBasisMgL = !s.jarProductId || App.doseBasisOf(v.jarProduct) === 'mgL';
     var winnerHtml = v.hasWinner ? '<div style="margin-top:15px;background:#16211F;border-radius:16px;padding:16px 17px;color:#EFECE3;">' +
       '<div style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#6E8A82;font-weight:700;">Selected optimum — Jar ' + esc(v.winnerN) + '</div>' +
-      '<div style="display:flex;align-items:baseline;gap:8px;margin-top:5px;"><div style="font-family:\'IBM Plex Mono\';font-size:30px;font-weight:600;color:#4FE0B5;">' + esc(v.winnerPpm) + '</div><div style="font-size:13px;color:#9FB0AA;">mg/L equivalent full-scale dose</div></div>' +
-      '<button data-act="useWinner" style="margin-top:12px;width:100%;border:none;cursor:pointer;background:#0C8577;color:#FFF;border-radius:12px;padding:13px;font-size:14.5px;font-weight:700;">Send this dose to the calculator →</button></div>' : '';
+      '<div style="display:flex;align-items:baseline;gap:8px;margin-top:5px;"><div style="font-family:\'IBM Plex Mono\';font-size:30px;font-weight:600;color:#4FE0B5;">' + esc(v.winnerPpm) + '</div><div style="font-size:13px;color:#9FB0AA;">' + (jarBasisMgL ? 'mg/L equivalent full-scale dose' : 'mg/L in the jar') + '</div></div>' +
+      (jarBasisMgL
+        ? '<button data-act="useWinner" style="margin-top:12px;width:100%;border:none;cursor:pointer;background:#0C8577;color:#FFF;border-radius:12px;padding:13px;font-size:14.5px;font-weight:700;">Send this dose to the calculator →</button>'
+        : '<div style="margin-top:12px;background:#202E2A;border:1px solid #35453F;border-radius:10px;padding:10px 12px;font-size:12px;color:#DCE6E1;line-height:1.5;"><b>' + esc(v.jarProduct.name) + '</b> doses per tonne of dry solids at full scale (' + esc(v.jarProduct.doseUnit || '') + ') — a jar mg/L doesn’t convert to a plant dose without the solids balance. Use the sludge / mining playbook’s dry-solids tools instead.</div>') +
+      '</div>' : '';
     var jarSaveForm = s.showJarSave ? ('<div style="margin-top:12px;background:#16211F;border-radius:16px;padding:16px;color:#EFECE3;">' +
       '<div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:#6E8A82;font-weight:700;margin-bottom:11px;">Save jar test</div>' +
       '<div style="font-size:11.5px;font-weight:600;color:#9FB0AA;margin-bottom:5px;">Attach to client (optional)</div>' +
@@ -658,7 +681,8 @@
           '<div style="display:flex;gap:8px;">' +
             '<div style="position:relative;flex:1;"><input inputmode="decimal" data-set="jarCurrentDose" data-key="jarCurrentDose" value="' + esc(s.jarCurrentDose) + '" placeholder="e.g. 5" style="width:100%;background:#FBF9F4;border:1px solid #D8D2C4;border-radius:10px;padding:11px 44px 11px 11px;font-size:15px;font-family:\'IBM Plex Mono\';font-weight:600;"><span style="position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:11px;color:#94A099;font-weight:600;">mg/L</span></div>' +
             '<button data-act="bracketJars" style="flex-shrink:0;border:1px solid #0C8577;background:#FFF;color:#0C8577;border-radius:10px;padding:0 13px;font-size:12.5px;font-weight:700;cursor:pointer;">Bracket 50–150%</button></div>' +
-          '<div style="margin-top:6px;font-size:11px;color:#94A099;line-height:1.45;">Sets the jars to 50 / 75 / 100 / 125 / 150% of what the plant doses today — the standard series for troubleshooting or trimming an existing programme.</div></div></div>' +
+          '<div style="margin-top:6px;font-size:11px;color:#94A099;line-height:1.45;">Sets the jars to 50 / 75 / 100 / 125 / 150% of what the plant doses today — the troubleshooting bracket from the field-playbooks brief.</div>' +
+          (s.bracketNote ? '<div style="margin-top:7px;background:#FBEBE7;border:1px solid #E9C4B9;border-radius:9px;padding:8px 11px;font-size:11.5px;color:#8A3A24;line-height:1.45;">' + esc(s.bracketNote) + '</div>' : '') + '</div></div>' +
       '<div style="margin-top:15px;display:flex;align-items:center;justify-content:space-between;"><div style="font-size:13px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:#6B776F;">Jars</div><div style="font-size:11px;color:#94A099;">tap ◎ to mark the winner</div></div>' +
       '<div style="margin-top:9px;display:flex;flex-direction:column;gap:10px;">' + jarRowsHtml + '</div>' +
       '<div style="margin-top:11px;display:flex;gap:9px;"><button data-act="addJar" style="flex:1;border:1px solid #D8D2C4;background:#FFF;cursor:pointer;border-radius:11px;padding:11px;font-size:13.5px;font-weight:700;color:#16211F;">+ Add jar</button><button data-act="removeJar" style="flex:1;border:1px solid #D8D2C4;background:#FFF;cursor:pointer;border-radius:11px;padding:11px;font-size:13.5px;font-weight:700;color:#6B776F;">– Remove last</button></div>' +
@@ -747,11 +771,19 @@
 
   // ============================ GUIDE (playbooks) ===========================
   function guideSrcNote(extra) {
-    return '<div style="margin-top:16px;font-size:11px;color:#94A099;line-height:1.5;">' + esc(window.PLAYBOOKS.source) + (extra ? ' ' + extra : '') + '</div>';
+    var src = (window.PLAYBOOKS && window.PLAYBOOKS.source) || '';
+    return '<div style="margin-top:16px;font-size:11px;color:#94A099;line-height:1.5;">' + esc(src) + (extra ? ' ' + extra : '') + '</div>';
   }
 
   App.screens.guide = function (v) {
     var PB = window.PLAYBOOKS;
+    // playbooks.js can be missing after a partial offline update — degrade to a
+    // message instead of throwing mid-render (which would freeze the screen)
+    if (!PB) {
+      return '<div style="padding:22px 18px 30px;animation:fadeUp .3s ease;">' +
+        '<div style="font-size:24px;font-weight:800;letter-spacing:-0.02em;margin:2px 0 8px;">Field Playbooks</div>' +
+        '<div style="background:#FBF6EC;border:1px solid #EBD9BC;border-radius:14px;padding:14px 15px;font-size:13px;color:#6B5A38;line-height:1.55;">The playbooks module didn’t load on this device — likely a partly-applied update while offline. Go online once, then pull to refresh; the rest of the app keeps working meanwhile.</div></div>';
+    }
     var chain = PB.chain.map(function (step, i) {
       return '<span style="flex-shrink:0;background:#16211F;color:#4FE0B5;border-radius:8px;padding:6px 10px;font-family:\'IBM Plex Mono\';font-size:11px;font-weight:600;">' + esc(step) + '</span>' +
         (i < PB.chain.length - 1 ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#94A099" stroke-width="2.4" style="flex-shrink:0;"><path d="M9 18l6-6-6-6"/></svg>' : '');
@@ -871,8 +903,11 @@
           '<div style="position:relative;"><input inputmode="decimal" data-actinput="onGuideReading" data-f="' + esc(key) + '" data-key="' + esc(key) + '" value="' + esc(val) + '" placeholder="—" style="width:100%;background:#FBF9F4;border:1px solid #D8D2C4;border-radius:10px;padding:11px ' + (f.u ? '58' : '11') + 'px 11px 11px;font-size:15px;font-family:\'IBM Plex Mono\';font-weight:600;">' + (f.u ? '<span style="position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:10.5px;color:#94A099;font-weight:600;">' + esc(f.u) + '</span>' : '') + '</div></div>';
       }).join('');
       var computedLine = '';
-      if (g.id === 'sewage') {
-        var ct = parseFloat(s.guideReadings['sewage:codt']), cf = parseFloat(s.guideReadings['sewage:codf']);
+      // any playbook that records total + filtered COD gets the derived line
+      // (sewage AND industrial today) — keyed off the declared fields, not the id
+      var hasCod = g.fields.some(function (f) { return f.k === 'codt'; }) && g.fields.some(function (f) { return f.k === 'codf'; });
+      if (hasCod) {
+        var ct = App.parseNum(s.guideReadings[g.id + ':codt']), cf = App.parseNum(s.guideReadings[g.id + ':codf']);
         if (isFinite(ct) && isFinite(cf)) {
           var pc = ct - cf;
           computedLine = pc >= 0
@@ -881,11 +916,16 @@
         }
       }
       var clientOpts = '<option value="">— save to existing client —</option>' + v.clients.map(function (c) { return '<option value="' + esc(c.id) + '"' + (c.id === s.guideSaveClient ? ' selected' : '') + '>' + esc(c.name) + '</option>'; }).join('');
+      // target select + name go through handlers that clear guideSaved: the
+      // '✓ Saved' banner must never survive an edit it doesn't cover. The button
+      // disables while guideSaved — that (not value-comparison) is the
+      // double-tap guard; any edit re-enables it.
       var saveRow = '<div style="margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:8px;">' +
-        '<select data-set="guideSaveClient" data-key="guideSaveClient" style="width:100%;background:#FFF;border:1px solid #D8D2C4;border-radius:10px;padding:11px 9px;font-size:13px;font-weight:600;color:#16211F;appearance:none;">' + clientOpts + '</select>' +
-        '<input data-set="guideSaveName" data-key="guideSaveName" value="' + esc(s.guideSaveName) + '" placeholder="…or new client name" style="width:100%;background:#FBF9F4;border:1px solid #D8D2C4;border-radius:10px;padding:11px;font-size:13px;font-weight:500;">' +
+        '<select data-actchange="onGuideProgSelect" data-f="guideSaveClient" data-key="guideSaveClient" style="width:100%;background:#FFF;border:1px solid #D8D2C4;border-radius:10px;padding:11px 9px;font-size:13px;font-weight:600;color:#16211F;appearance:none;">' + clientOpts + '</select>' +
+        '<input data-actinput="onGuideProgField" data-f="guideSaveName" data-key="guideSaveName" value="' + esc(s.guideSaveName) + '" placeholder="…or new client name" style="width:100%;background:#FBF9F4;border:1px solid #D8D2C4;border-radius:10px;padding:11px;font-size:13px;font-weight:500;">' +
         '</div>' +
-        '<button data-act="saveGuideReadings" style="margin-top:9px;width:100%;border:1px solid #0C8577;cursor:pointer;background:#FFF;color:#0C8577;border-radius:11px;padding:12px;font-size:13.5px;font-weight:700;">Save readings to client</button>' +
+        '<button data-act="saveGuideReadings" ' + (s.guideSaved ? 'disabled ' : '') + 'style="margin-top:9px;width:100%;border:1px solid ' + (s.guideSaved ? '#C9D2CD' : '#0C8577') + ';cursor:pointer;background:#FFF;color:' + (s.guideSaved ? '#B4BBB4' : '#0C8577') + ';border-radius:11px;padding:12px;font-size:13.5px;font-weight:700;">Save readings to client</button>' +
+        (s.guideSaveError ? '<div style="margin-top:8px;background:#FBEBE7;border:1px solid #E9C4B9;border-radius:10px;padding:9px 12px;font-size:12px;color:#8A3A24;line-height:1.45;font-weight:600;">' + esc(s.guideSaveError) + '</div>' : '') +
         (s.guideSaved ? '<div style="margin-top:8px;background:#ECF7F3;border:1px solid #B8E0D3;border-radius:10px;padding:9px 12px;font-size:12px;color:#17564C;font-weight:600;">✓ Saved — dated ' + esc(new Date().toLocaleDateString('en-AU')) + ', see the client card.</div>' : '');
       readingsHtml = '<div style="margin-top:12px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
         '<div style="font-size:12.5px;font-weight:700;color:#4B564F;">Site readings</div>' +
@@ -899,20 +939,18 @@
     var progHtml = '';
     if (g.fields && g.fields.length) {
       var prog = App.computeProg();
-      var unitSel = '<select data-set="guideProgDoseUnit" data-key="guideProgDoseUnit" style="border:none;border-left:1px solid #E2DDD0;background:#F6F3EC;padding:0 26px 0 10px;font-size:12px;font-weight:700;color:#4B564F;appearance:none;cursor:pointer;background-image:' + DOWNARROW + ';background-repeat:no-repeat;background-position:right 9px center;">' +
-        optionTags([{ v: 'mgL', label: 'mg/L' }, { v: 'kgt', label: 'kg/t DS' }, { v: 'gt', label: 'g/t DS' }], s.guideProgDoseUnit, 'v', 'label') + '</select>';
-      var flowSel = '<select data-set="guideProgFlowUnit" data-key="guideProgFlowUnit" style="border:none;border-left:1px solid #E2DDD0;background:#F6F3EC;padding:0 26px 0 10px;font-size:12px;font-weight:700;color:#4B564F;appearance:none;cursor:pointer;background-image:' + DOWNARROW + ';background-repeat:no-repeat;background-position:right 9px center;">' +
+      var unitSel = '<select data-actchange="onGuideProgSelect" data-f="guideProgDoseUnit" data-key="guideProgDoseUnit" style="border:none;border-left:1px solid #E2DDD0;background:#F6F3EC;padding:0 26px 0 10px;font-size:12px;font-weight:700;color:#4B564F;appearance:none;cursor:pointer;background-image:' + DOWNARROW + ';background-repeat:no-repeat;background-position:right 9px center;">' +
+        optionTags(App.DOSE_UNITS, s.guideProgDoseUnit, 'v', 'label') + '</select>';
+      var flowSel = '<select data-actchange="onGuideProgSelect" data-f="guideProgFlowUnit" data-key="guideProgFlowUnit" style="border:none;border-left:1px solid #E2DDD0;background:#F6F3EC;padding:0 26px 0 10px;font-size:12px;font-weight:700;color:#4B564F;appearance:none;cursor:pointer;background-image:' + DOWNARROW + ';background-repeat:no-repeat;background-position:right 9px center;">' +
         optionTags(App.FLOW_UNITS, s.guideProgFlowUnit, 'v', 'label') + '</select>';
       var winHtml = '';
       if (prog.win) {
-        var w = prog.win, wok = w.status === 'within';
-        var wmsg = wok ? 'sits <b>within</b> the datasheet window — a fair baseline; a bracketing retest shows if less still performs.'
-          : (w.status === 'above' ? 'is <b>above</b> the datasheet window — possible overdose (wasted product, risk of re-stabilising solids). Retest downward.'
-            : 'is <b>below</b> the datasheet window — may be underdosing. Retest upward before concluding the product has failed.');
-        winHtml = '<div style="margin-top:10px;background:' + (wok ? '#ECF7F3' : '#FBF6EC') + ';border:1px solid ' + (wok ? '#B8E0D3' : '#EBD9BC') + ';border-radius:10px;padding:10px 12px;font-size:12.5px;line-height:1.55;color:' + (wok ? '#17564C' : '#6B5A38') + ';"><b>' + esc(w.name) + '</b> — typical window <b style="font-family:\'IBM Plex Mono\';">' + w.lo + '–' + w.hi + ' ' + w.unit + '</b> ' + vbadge(w.verified) + '. Their rate (' + (w.val === parseFloat(s.guideProgDose) ? w.val : w.val + ' ' + w.unit + ' equivalent') + ') ' + wmsg +
-          (w.note ? '<div style="margin-top:6px;font-size:11px;opacity:.8;line-height:1.45;">Datasheet basis: ' + esc(w.note) + '</div>' : '') + '</div>';
+        winHtml = doseWindowBanner(prog.win, 'Their rate');
       } else if (prog.unitMismatch) {
-        winHtml = '<div style="margin-top:10px;background:#FBF9F4;border:1px dashed #D8D2C4;border-radius:10px;padding:9px 12px;font-size:11.5px;color:#94A099;line-height:1.5;">The entered dose unit doesn’t match this product’s datasheet basis (' + esc((prog.product || {}).doseUnit || '') + ') — no window comparison shown.</div>';
+        winHtml = doseWindowBanner({
+          mismatch: true, name: (prog.product || {}).name || '',
+          rawUnit: (prog.product || {}).doseUnit || '', note: (prog.product || {}).doseNote || ''
+        }, 'The entered dose unit');
       }
       var consHtml = prog.hasCons ? '<div style="margin-top:9px;background:#16211F;border-radius:10px;padding:11px 13px;color:#EFECE3;">' +
         '<div style="display:flex;gap:22px;">' +
@@ -937,15 +975,15 @@
         '<div style="margin-top:6px;font-size:10.5px;color:#94A099;line-height:1.4;">Product not listed? Add it under Products → “Add your own product”, then pick it here.</div>' +
         '<div style="margin-top:10px;display:flex;flex-direction:column;gap:10px;">' +
           '<div><div style="font-size:11.5px;font-weight:600;color:#6B776F;margin-bottom:4px;">Current dose rate</div>' +
-            '<div style="display:flex;border:1px solid #D8D2C4;border-radius:10px;background:#FBF9F4;overflow:hidden;"><input inputmode="decimal" data-set="guideProgDose" data-key="guideProgDose" value="' + esc(s.guideProgDose) + '" placeholder="—" style="flex:1;min-width:0;border:none;background:transparent;padding:11px;font-size:15px;font-family:\'IBM Plex Mono\';font-weight:600;">' + unitSel + '</div></div>' +
+            '<div style="display:flex;border:1px solid #D8D2C4;border-radius:10px;background:#FBF9F4;overflow:hidden;"><input inputmode="decimal" data-actinput="onGuideProgField" data-f="guideProgDose" data-key="guideProgDose" value="' + esc(s.guideProgDose) + '" placeholder="—" style="flex:1;min-width:0;border:none;background:transparent;padding:11px;font-size:15px;font-family:\'IBM Plex Mono\';font-weight:600;">' + unitSel + '</div></div>' +
           '<div><div style="font-size:11.5px;font-weight:600;color:#6B776F;margin-bottom:4px;">Plant / feed flow</div>' +
-            '<div style="display:flex;border:1px solid #D8D2C4;border-radius:10px;background:#FBF9F4;overflow:hidden;"><input inputmode="decimal" data-set="guideProgFlow" data-key="guideProgFlow" value="' + esc(s.guideProgFlow) + '" placeholder="—" style="flex:1;min-width:0;border:none;background:transparent;padding:11px;font-size:15px;font-family:\'IBM Plex Mono\';font-weight:600;">' + flowSel + '</div></div>' +
+            '<div style="display:flex;border:1px solid #D8D2C4;border-radius:10px;background:#FBF9F4;overflow:hidden;"><input inputmode="decimal" data-actinput="onGuideProgField" data-f="guideProgFlow" data-key="guideProgFlow" value="' + esc(s.guideProgFlow) + '" placeholder="—" style="flex:1;min-width:0;border:none;background:transparent;padding:11px;font-size:15px;font-family:\'IBM Plex Mono\';font-weight:600;">' + flowSel + '</div></div>' +
         '</div>' + winHtml + consHtml + progBtns + '</div>';
     }
 
     var tdiHtml = '';
     if (g.tdi) {
-      var tdi = App.computeTdi();
+      var tdi = App.computeTdi(g.id);
       var flagRows = tdi.rows.map(function (r) {
         return '<div style="background:' + r.bg + ';border-radius:10px;padding:9px 12px;">' +
           '<div style="display:flex;justify-content:space-between;gap:8px;"><span style="font-size:12.5px;font-weight:700;color:' + r.fg + ';">' + esc(r.label) + '</span><span style="font-size:12px;font-weight:700;font-family:\'IBM Plex Mono\';color:' + r.fg + ';flex-shrink:0;">' + esc(r.lvl) + '</span></div>' +

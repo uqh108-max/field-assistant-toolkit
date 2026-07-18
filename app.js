@@ -63,11 +63,11 @@
       npu: { model: '', brand: '', type: 'Solenoid diaphragm', maxFlow: '', maxPress: '', control: 'Digital', note: '' },
       showJarSave: false, jarSaveClient: '', jarSaveNote: '', jarSaved: false,
       guideId: null, guideChecks: {},
-      guideReadings: {}, guideSaveClient: '', guideSaveName: '', guideSaved: false,
+      guideReadings: {}, guideSaveClient: '', guideSaveName: '', guideSaved: false, guideSaveError: '',
       guideProgProductId: '', guideProgPickerOpen: false, guideProgPickerQuery: '',
       guideProgDose: '', guideProgDoseUnit: 'mgL', guideProgFlow: '', guideProgFlowUnit: 'm3h',
-      guideProgFor: '',
-      jarCurrentDose: '',
+      guideProgFor: '', guideProgByPb: {},
+      jarCurrentDose: '', bracketNote: '',
       mgSample: '500', mgSolids: '30', mgStock: '0.1', mgMl: ''
     },
 
@@ -83,6 +83,12 @@
       { v: 'MLd', label: 'ML/d', k: 1000 / 24 }
     ],
 
+    DOSE_UNITS: [
+      { v: 'mgL', label: 'mg/L' },
+      { v: 'kgt', label: 'kg/t DS' },
+      { v: 'gt', label: 'g/t DS' }
+    ],
+
     // ---- persistence --------------------------------------------------------
     load: function () {
       try {
@@ -96,13 +102,24 @@
         if (rawJT) this.state.jarTests = JSON.parse(rawJT);
       } catch (e) {}
     },
-    persist: function (c) { try { localStorage.setItem('ctf_clients_v1', JSON.stringify(c)); } catch (e) {} },
+    persist: function (c) { try { localStorage.setItem('ctf_clients_v1', JSON.stringify(c)); return true; } catch (e) { return false; } },
     persistPumps: function (p) { try { localStorage.setItem('ctf_pumps_v1', JSON.stringify(p)); } catch (e) {} },
     persistProducts: function (p) { try { localStorage.setItem('ctf_products_v1', JSON.stringify(p)); } catch (e) {} },
     persistTests: function (t) { try { localStorage.setItem('ctf_jartests_v1', JSON.stringify(t)); } catch (e) {} },
 
     // ---- maths (verbatim port) ---------------------------------------------
     flowFactor: function (u) { var f = this.FLOW_UNITS.find(function (x) { return x.v === u; }); return f ? f.k : 1; },
+    flowLabel: function (u) { var f = this.FLOW_UNITS.find(function (x) { return x.v === u; }); return f ? f.label : 'm³/h'; },
+    // Unknown codes label as themselves — a silent fallback label would relabel
+    // a saved dose under the wrong unit.
+    doseUnitLabel: function (v) { var u = this.DOSE_UNITS.find(function (x) { return x.v === v; }); return u ? u.label : String(v); },
+    // Strict decimal parse: the whole string must be one plain positive number.
+    // parseFloat's prefix parsing turns '1,000' into 1 and '5-10' into 5 — a
+    // three-orders-of-magnitude dosing error that looks valid on screen.
+    parseNum: function (str) {
+      var t = String(str == null ? '' : str).trim();
+      return /^\d*\.?\d+$/.test(t) ? parseFloat(t) : NaN;
+    },
     parsePumpFlow: function (str) {
       if (!str) return NaN;
       var m = String(str).match(/([\d.,]+)\s*(ml\/min|l\/min|l\/s|l\/h|gpd|gph)?/i);
@@ -123,6 +140,12 @@
       var d = parseFloat(dose), sp = parseFloat(this.state.stockPct), v = parseFloat(this.state.jarVol);
       if (!isFinite(d) || !isFinite(sp) || !isFinite(v) || v <= 0) return NaN;
       return d * 10000 * sp / v;
+    },
+    // Inverse of jarPpm: mL of stock that delivers `ppm` in the current jar setup.
+    jarMl: function (ppm) {
+      var sp = parseFloat(this.state.stockPct), v = parseFloat(this.state.jarVol);
+      if (!isFinite(ppm) || !isFinite(sp) || sp <= 0 || !isFinite(v) || v <= 0) return NaN;
+      return ppm * v / (10000 * sp);
     },
     computeCalc: function () {
       var s = this.state;
@@ -201,9 +224,10 @@
     // ---- Guide tab maths ------------------------------------------------------
     // Potable demand snapshot. The band thresholds are ILLUSTRATIVE demo values
     // (rendered with an EXAMPLE badge) — calibrate against site jar-test history.
-    computeTdi: function () {
+    computeTdi: function (pbId) {
+      var pre = (pbId || 'potable') + ':';
       var r = this.state.guideReadings;
-      var t = parseFloat(r['potable:turb']), u = parseFloat(r['potable:uv']), a = parseFloat(r['potable:alk']), p = parseFloat(r['potable:ph']);
+      var t = this.parseNum(r[pre + 'turb']), u = this.parseNum(r[pre + 'uv']), a = this.parseNum(r[pre + 'alk']), p = this.parseNum(r[pre + 'ph']);
       var LEV = ['Low', 'Moderate', 'High'];
       var COL = [
         { fg: '#2C7A45', bg: '#EAF5EC' },
@@ -225,7 +249,9 @@
         'High solids — sweep flocculation likely; judge settled AND filtered turbidity.'
       ][part] });
       if (isFinite(a)) {
-        var ab = a < 40 ? 2 : (a <= 120 ? 0 : 0);
+        // 'Adequate' and 'Well buffered' intentionally share the calm colour —
+        // only low alkalinity is a warning state.
+        var ab = a < 40 ? 2 : 0;
         rows.push({ label: 'Buffering (alkalinity)', lvl: a < 40 ? 'Poor' : (a <= 120 ? 'Adequate' : 'Well buffered'), fg: COL[ab].fg, bg: COL[ab].bg, note: a < 40
           ? 'Poorly buffered — hydrolysing coagulants will depress pH; alkalinity supplementation may be needed.'
           : (a <= 120 ? 'Buffering adequate for typical doses.' : 'Well buffered — post-dose pH easier to hold.') });
@@ -243,8 +269,8 @@
     // Mining bench dose: sample mass + %solids + stock added → g/t dry solids.
     computeBench: function () {
       var s = this.state;
-      var m = parseFloat(s.mgSample), so = parseFloat(s.mgSolids), st = parseFloat(s.mgStock), ml = parseFloat(s.mgMl);
-      var dryG = (m > 0 && so > 0) ? m * so / 100 : NaN;      // g dry solids in the vessel
+      var m = this.parseNum(s.mgSample), so = this.parseNum(s.mgSolids), st = this.parseNum(s.mgStock), ml = this.parseNum(s.mgMl);
+      var dryG = (m > 0 && so > 0 && so <= 100) ? m * so / 100 : NaN; // g dry solids; >100 %w/w is physically impossible — abstain
       var activeMg = (st > 0 && ml > 0) ? ml * st * 10 : NaN; // % w/v → mg/mL is ×10
       var doseGt = (isFinite(dryG) && dryG > 0 && isFinite(activeMg)) ? activeMg * 1000 / dryG : NaN;
       return {
@@ -257,12 +283,16 @@
 
     // Which basis a product's datasheet dose is quoted in.
     // 'mgL' = mg/L on flow · 'kgt' = kg/t dry solids · 'gt' = g/t dry solids/substrate.
+    // Returns null when the phrasing is unrecognisable — the callers then abstain
+    // from any window comparison rather than guessing a basis (a wrong guess here
+    // is a confident 1000× dosing error; an abstention is just a missing chip).
     doseBasisOf: function (p) {
       var c = String((p && p.doseUnit) || '').replace(/\s+/g, '').toLowerCase();
-      if (c.indexOf('dry') < 0) return 'mgL';
-      if (c.indexOf('kg/t') >= 0) return 'kgt';
-      if (c.indexOf('g/t') >= 0) return 'gt';
-      return 'kgt';
+      if (!c) return 'mgL'; // no unit recorded — generic products dose mg/L on flow
+      if (c.indexOf('mg/l') >= 0 || c.indexOf('mgl') >= 0 || c.indexOf('ppm') >= 0) return 'mgL';
+      if (c.indexOf('kg/t') >= 0 || c.indexOf('kgpert') >= 0) return 'kgt';
+      if (c.indexOf('g/t') >= 0 || c.indexOf('gpert') >= 0) return 'gt';
+      return null;
     },
     // Window comparison against a specific product's datasheet range. `val` must
     // already be in the product's own dose basis. Abstains rather than guesses:
@@ -270,56 +300,73 @@
     // ("0.25-0.5; NSF max 1.0"), or anything that isn't exactly "lo – hi".
     doseWindowFor: function (p, val) {
       if (!p || !p.doseRange || !isFinite(val) || val <= 0) return null;
+      var basis = this.doseBasisOf(p);
+      if (!basis) return null; // unrecognisable basis — no comparison
       var str = String(p.doseRange);
       if (str.indexOf(',') >= 0) return null;
       var nums = str.match(/[\d.]+/g) || [];
       var all = str.match(/[\d.]+\s*[–—-]\s*[\d.]+/g);
       if (!all || all.length !== 1 || nums.length !== 2) return null;
+      // Each bound must be a plain decimal with ≤2 dp: '1.000' is indistinguishable
+      // from European thousands grouping, and '0.5.2' is a typo — abstain on both.
+      if (!nums.every(function (n) { return /^\d+(\.\d{1,2})?$/.test(n); })) return null;
       var m = all[0].match(/([\d.]+)\s*[–—-]\s*([\d.]+)/);
       var lo = parseFloat(m[1]), hi = parseFloat(m[2]);
       if (!isFinite(lo) || !isFinite(hi) || hi <= 0 || lo > hi) return null;
-      var basis = this.doseBasisOf(p);
       var status = val < lo ? 'below' : (val > hi ? 'above' : 'within');
-      return { lo: lo, hi: hi, val: val, status: status, unit: { mgL: 'mg/L', kgt: 'kg/t DS', gt: 'g/t DS' }[basis], raw: p.doseRange, name: p.name, verified: p.verified, note: p.doseNote || '' };
+      return { lo: lo, hi: hi, val: val, status: status, unit: this.doseUnitLabel(basis), raw: p.doseRange, name: p.name, verified: p.verified, note: p.doseNote || '' };
     },
     // Calc screen: compare the entered dose when the product's dose basis is
-    // reachable from the calc mode (mg/L ↔ conc; kg/t or g/t ↔ sludge).
+    // reachable from the calc mode (mg/L ↔ conc; kg/t or g/t ↔ sludge). A basis
+    // the mode can't reach returns a mismatch object — the calc must SAY the
+    // datasheet doses on a different basis, not silently drop the check.
     doseWindow: function () {
       var s = this.state;
       var p = this.allProducts().find(function (x) { return x.id === s.calcProductId; });
       if (!p) return null;
       var basis = this.doseBasisOf(p);
-      if (s.calcMode === 'conc') return basis === 'mgL' ? this.doseWindowFor(p, parseFloat(s.dose)) : null;
-      var v = parseFloat(s.doseKg); // sludge mode doses in kg/t DS
+      if (!basis) return null; // unrecognisable basis — abstain
+      var mismatch = { mismatch: true, name: p.name, rawUnit: p.doseUnit || '', note: p.doseNote || '' };
+      if (s.calcMode === 'conc') {
+        if (basis !== 'mgL') return mismatch;
+        return this.doseWindowFor(p, this.parseNum(s.dose));
+      }
+      var v = this.parseNum(s.doseKg); // sludge mode doses in kg/t DS
       if (basis === 'kgt') return this.doseWindowFor(p, v);
-      if (basis === 'gt') return this.doseWindowFor(p, v * 1000);
-      return null;
+      if (basis === 'gt') {
+        var w = this.doseWindowFor(p, v * 1000);
+        if (w) w.converted = true;
+        return w;
+      }
+      return mismatch; // mg/L-basis product in sludge mode
     },
     // Current dosing programme entered in a playbook: window check + consumption.
     computeProg: function () {
       var s = this.state;
       var p = this.allProducts().find(function (x) { return x.id === s.guideProgProductId; }) || null;
-      var d = parseFloat(s.guideProgDose);
-      if (!(d > 0)) d = NaN; // negatives and zero are not doses
+      var d = this.parseNum(s.guideProgDose); // strict: '1,000' and '5-10' abstain, negatives rejected
+      if (!(d > 0)) d = NaN;
       var basis = s.guideProgDoseUnit; // mgL | kgt | gt
       var win = null, unitMismatch = false;
       if (p && isFinite(d)) {
         var pBasis = this.doseBasisOf(p);
         var val = NaN;
-        if (basis === pBasis) val = d;
+        if (pBasis && basis === pBasis) val = d;
         else if (basis === 'kgt' && pBasis === 'gt') val = d * 1000;
         else if (basis === 'gt' && pBasis === 'kgt') val = d / 1000;
-        if (isFinite(val)) win = this.doseWindowFor(p, val);
-        else unitMismatch = true;
+        if (isFinite(val)) {
+          win = this.doseWindowFor(p, val);
+          if (win) win.converted = basis !== pBasis;
+        } else unitMismatch = true;
       }
-      var Q = parseFloat(s.guideProgFlow) * this.flowFactor(s.guideProgFlowUnit);
+      var Q = this.parseNum(s.guideProgFlow) * this.flowFactor(s.guideProgFlowUnit);
       if (!(Q > 0)) Q = NaN;
       var kgH = (basis === 'mgL' && isFinite(Q) && isFinite(d)) ? Q * d / 1000 : NaN;
       return {
         product: p, win: win, unitMismatch: unitMismatch,
         kgH: this.fmt(kgH, 2), kgDay: this.fmt(kgH * 24, 1), hasCons: isFinite(kgH),
         canRetest: basis === 'mgL' && isFinite(d),
-        canSend: isFinite(d) || isFinite(Q)
+        canSend: !!p || isFinite(d) || isFinite(Q)
       };
     },
 
@@ -328,6 +375,41 @@
 
     allProducts: function () { return this.PRODUCTS.concat(this.state.customProducts); },
     allPumps: function () { return this.PUMPS.concat(this.state.foundPumps); },
+
+    // Fresh client record. Both save paths (calc + playbook readings) build on
+    // this so the shape and id scheme can never diverge.
+    newClient: function (name, site) {
+      return { id: 'c' + Date.now(), name: name, site: site || '', readings: [] };
+    },
+    findClientByName: function (clients, name) {
+      var n = String(name || '').trim().toLowerCase();
+      if (!n) return null;
+      return clients.find(function (c) { return String(c.name || '').trim().toLowerCase() === n; }) || null;
+    },
+    // The patch a product selection applies to the calculator (form + density).
+    productCalcPatch: function (p) {
+      var patch = {};
+      if (!p) return patch;
+      patch.form = p.form === 'Powder' ? 'powder' : 'liquid';
+      if (p.density) patch.density = String(p.density);
+      return patch;
+    },
+    // index.html's controllerchange handler asks this before auto-reloading an
+    // update: a mid-visit reload would destroy these memory-only entries.
+    hasUnsavedFieldData: function () {
+      var s = this.state;
+      if (!s.guideSaved) {
+        for (var k in s.guideReadings) { if (String(s.guideReadings[k] || '').trim()) return true; }
+        if (String(s.guideProgDose || '').trim() || String(s.guideProgFlow || '').trim() || s.guideProgProductId) return true;
+      }
+      for (var pid in s.guideProgByPb) {
+        var g = s.guideProgByPb[pid];
+        if (g && (String(g.dose || '').trim() || String(g.flow || '').trim() || g.productId)) return true;
+      }
+      if (s.winner !== null) return true;
+      if (s.jars.some(function (j) { return j.ph || j.turb || j.floc; })) return true;
+      return false;
+    },
 
     // ---- style factories (from design) -------------------------------------
     navStyle: function (active) {
@@ -354,17 +436,30 @@
     goGuide: function () { App.setState({ screen: 'guide', guideId: null, productId: null }); },
     openGuide: function (el) {
       var id = el.dataset.id;
-      var patch = { screen: 'guide', guideId: id, guideSaved: false };
-      // The programme entry belongs to one playbook (guideProgFor). Opening a
-      // DIFFERENT playbook starts fresh (value and unit reset together — never
-      // relabel an entered dose under a new unit). Re-opening the same playbook,
-      // including via the list, keeps everything — even a unit override.
-      if (id !== App.state.guideProgFor) {
+      var s = App.state;
+      var patch = { screen: 'guide', guideId: id, guideSaved: false, guideSaveError: '' };
+      // The programme entry belongs to one playbook (guideProgFor). Switching
+      // playbooks parks the outgoing entry in guideProgByPb and restores this
+      // playbook's own — navigation never wipes an entered dose, and value and
+      // unit always travel together (never relabel a dose under a new unit).
+      if (id !== s.guideProgFor) {
+        var store = Object.assign({}, s.guideProgByPb);
+        if (s.guideProgFor) {
+          store[s.guideProgFor] = {
+            productId: s.guideProgProductId, dose: s.guideProgDose, doseUnit: s.guideProgDoseUnit,
+            flow: s.guideProgFlow, flowUnit: s.guideProgFlowUnit
+          };
+        }
+        var pb = (window.PLAYBOOKS && window.PLAYBOOKS.list.find(function (x) { return x.id === id; })) || null;
+        var saved = store[id] || null;
+        patch.guideProgByPb = store;
         patch.guideProgFor = id;
-        patch.guideProgProductId = ''; patch.guideProgDose = ''; patch.guideProgFlow = '';
+        patch.guideProgProductId = saved ? saved.productId : '';
+        patch.guideProgDose = saved ? saved.dose : '';
+        patch.guideProgFlow = saved ? saved.flow : '';
+        patch.guideProgDoseUnit = saved ? saved.doseUnit : ((pb && pb.progUnit) || 'mgL');
+        patch.guideProgFlowUnit = saved ? saved.flowUnit : 'm3h';
         patch.guideProgPickerOpen = false; patch.guideProgPickerQuery = '';
-        patch.guideProgDoseUnit = { sludge: 'kgt', mining: 'gt' }[id] || 'mgL';
-        patch.guideProgFlowUnit = 'm3h';
       }
       App.setState(patch);
     },
@@ -377,11 +472,25 @@
     },
     guideToProducts: function (el) { App.setState({ screen: 'products', productFilter: el.dataset.v || 'all', productId: null, productQuery: '' }); },
     guideToSludgeCalc: function () { App.setState({ screen: 'calc', calcMode: 'sludge' }); },
-    guideToJars: function () { App.setState({ screen: 'jars' }); },
+    // A playbook whose dose basis is mg/L on flow must land in Concentration
+    // mode, whatever mode the calc was last left in.
+    guideToConcCalc: function () { App.setState({ screen: 'calc', calcMode: 'conc' }); },
     onGuideReading: function (el) {
       var g = Object.assign({}, App.state.guideReadings);
       g[el.dataset.f] = el.value;
-      App.setState({ guideReadings: g, guideSaved: false });
+      App.setState({ guideReadings: g, guideSaved: false, guideSaveError: '' });
+    },
+    // Programme inputs / selects: any edit invalidates the '✓ Saved' banner —
+    // it must never claim a value the client record doesn't hold.
+    onGuideProgField: function (el) {
+      var patch = { guideSaved: false, guideSaveError: '' };
+      patch[el.dataset.f] = el.value;
+      App.setState(patch);
+    },
+    onGuideProgSelect: function (el) {
+      var patch = { guideSaved: false, guideSaveError: '' };
+      patch[el.dataset.f] = el.value;
+      App.setState(patch);
     },
     toggleGuideProgPicker: function () {
       var open = !App.state.guideProgPickerOpen;
@@ -389,41 +498,46 @@
       App.setState({ guideProgPickerOpen: open, guideProgPickerQuery: '' });
     },
     pickGuideProgProduct: function (el) {
-      App.setState({ guideProgProductId: el.dataset.id, guideProgPickerOpen: false, guideProgPickerQuery: '', guideSaved: false });
+      App.setState({ guideProgProductId: el.dataset.id, guideProgPickerOpen: false, guideProgPickerQuery: '', guideSaved: false, guideSaveError: '' });
     },
     // Carry the plant's current programme into the calculator. An explicit
     // "send" action is allowed to set the matching calc mode.
     guideProgToCalc: function () {
       var s = App.state;
-      var p = App.allProducts().find(function (x) { return x.id === s.guideProgProductId; });
-      var patch = { screen: 'calc' };
-      if (p) {
-        patch.calcProductId = p.id;
-        patch.form = p.form === 'Powder' ? 'powder' : 'liquid';
-        if (p.density) patch.density = String(p.density);
-      }
-      var d = parseFloat(s.guideProgDose);
+      var p = App.allProducts().find(function (x) { return x.id === s.guideProgProductId; }) || null;
+      // '— not in library / unknown —' must clear the calc's product too: leaving
+      // a stale selection would grade this plant's dose against the wrong datasheet.
+      var patch = Object.assign({ screen: 'calc', calcProductId: p ? p.id : '' }, App.productCalcPatch(p));
+      var d = App.parseNum(s.guideProgDose);   // strict parse: only clean positive
+      var f = App.parseNum(s.guideProgFlow);   // numbers may reach the calculator
       if (s.guideProgDoseUnit === 'mgL') {
         patch.calcMode = 'conc';
-        if (isFinite(d)) patch.dose = s.guideProgDose;
-        if (s.guideProgFlow.trim()) { patch.flow = s.guideProgFlow; patch.flowUnit = s.guideProgFlowUnit; }
+        if (d > 0) patch.dose = String(d);
+        if (f > 0) { patch.flow = String(f); patch.flowUnit = s.guideProgFlowUnit; }
       } else {
         patch.calcMode = 'sludge';
-        if (isFinite(d)) patch.doseKg = String(s.guideProgDoseUnit === 'gt' ? d / 1000 : d);
-        if (s.guideProgFlow.trim()) { patch.sludgeFlow = s.guideProgFlow; patch.sludgeFlowUnit = s.guideProgFlowUnit; }
+        if (d > 0) patch.doseKg = String(s.guideProgDoseUnit === 'gt' ? d / 1000 : d);
+        if (f > 0) { patch.sludgeFlow = String(f); patch.sludgeFlowUnit = s.guideProgFlowUnit; }
+        // carry the solids reading collected on this playbook screen — the calc's
+        // stale % DS default would silently mis-state consumption otherwise
+        var sv = App.parseNum(s.guideReadings[s.guideId + ':solids']);
+        if (sv > 0 && sv <= 100) patch.ds = String(sv);
       }
       App.setState(patch);
     },
-    // Optimisation retest of the current programme: jump to jars pre-bracketed.
+    // Optimisation retest of the current programme: jump to jars pre-bracketed,
+    // carrying the programme's product so the test is attributed correctly.
     guideProgRetest: function () {
-      var d = parseFloat(App.state.guideProgDose);
-      if (!isFinite(d) || d <= 0) return;
-      App.setState({ screen: 'jars', jarCurrentDose: String(d) });
+      var s = App.state;
+      var d = App.parseNum(s.guideProgDose);
+      if (!(d > 0)) return;
+      var p = App.allProducts().find(function (x) { return x.id === s.guideProgProductId; }) || null;
+      App.setState({ screen: 'jars', jarCurrentDose: String(d), jarProductId: p ? p.id : '' });
       App.H.bracketJars();
     },
     saveGuideReadings: function () {
       var s = App.state;
-      var pb = window.PLAYBOOKS.list.find(function (x) { return x.id === s.guideId; });
+      var pb = window.PLAYBOOKS && window.PLAYBOOKS.list.find(function (x) { return x.id === s.guideId; });
       if (!pb || !pb.fields) return;
       var vals = [];
       pb.fields.forEach(function (f) {
@@ -437,47 +551,68 @@
       if (progP || pd || pf) {
         prog = {
           product: progP ? progP.name : '',
-          dose: pd, unit: { mgL: 'mg/L', kgt: 'kg/t DS', gt: 'g/t DS' }[s.guideProgDoseUnit] || 'mg/L',
-          flow: pf, flowUnit: (App.FLOW_UNITS.find(function (f) { return f.v === s.guideProgFlowUnit; }) || { label: 'm³/h' }).label
+          dose: pd, unit: App.doseUnitLabel(s.guideProgDoseUnit),
+          flow: pf, flowUnit: App.flowLabel(s.guideProgFlowUnit)
         };
       }
-      if (!vals.length && !prog) return;
+      if (!vals.length && !prog) {
+        App.setState({ guideSaveError: 'Nothing to save yet — enter at least one reading or the dosing programme.' });
+        return;
+      }
       var clients = s.clients.slice();
       var cid = s.guideSaveClient;
       // a stale selection (client deleted since) must not swallow the save
       if (cid && !clients.some(function (c) { return c.id === cid; })) cid = '';
-      if (!cid && s.guideSaveName.trim()) {
-        var nc = { id: 'c' + Date.now(), name: s.guideSaveName.trim(), site: '', readings: [] };
-        clients = [nc].concat(clients); cid = nc.id;
+      var newName = s.guideSaveName.trim();
+      if (!cid && newName) {
+        // a site already on file under this name gets the readings appended —
+        // never a second record splitting the site's history
+        var existing = App.findClientByName(clients, newName);
+        if (existing) cid = existing.id;
+        else { var nc = App.newClient(newName); clients = [nc].concat(clients); cid = nc.id; }
       }
-      if (!cid) return;
-      var entry = { date: new Date().toLocaleDateString('en-AU'), app: pb.name, values: vals, prog: prog };
-      // double-tap guard: identical to the client's latest entry → don't duplicate
-      var target = clients.find(function (c) { return c.id === cid; });
-      var latest = target && target.readings && target.readings[0];
-      if (latest && JSON.stringify(latest) === JSON.stringify(entry)) {
-        App.setState({ guideSaved: true, guideSaveClient: cid });
+      if (!cid) {
+        App.setState({ guideSaveError: 'Choose a client or type a new client name first — nothing was saved.' });
         return;
       }
+      var entry = { date: new Date().toLocaleDateString('en-AU'), app: pb.name, values: vals, prog: prog };
       clients = clients.map(function (c) {
         if (c.id !== cid) return c;
         var copy = Object.assign({}, c);
         copy.readings = [entry].concat(copy.readings || []);
         return copy;
       });
-      App.persist(clients);
-      App.setState({ clients: clients, guideSaved: true, guideSaveClient: cid, guideSaveName: '' });
+      if (!App.persist(clients)) {
+        App.setState({ guideSaveError: 'Could not write to this device’s storage — the readings are NOT saved. Free up space (or leave private browsing) and save again.' });
+        return;
+      }
+      // guideSaved also disables the Save button until something is edited —
+      // that is the double-tap guard (any input clears it via onGuideProgField/onGuideReading)
+      App.setState({ clients: clients, guideSaved: true, guideSaveClient: cid, guideSaveName: '', guideSaveError: '' });
     },
     // Optimisation retest: set the jars to 50–150% of the current full-scale dose.
+    // Abstains loudly (bracketNote) instead of leaving stale jars that would
+    // masquerade as the requested bracket.
     bracketJars: function () {
       var s = App.state;
-      var cur = parseFloat(s.jarCurrentDose), vol = parseFloat(s.jarVol), sp = parseFloat(s.stockPct);
-      if (!isFinite(cur) || cur <= 0 || !isFinite(vol) || vol <= 0 || !isFinite(sp) || sp <= 0) return;
-      var jars = [0.5, 0.75, 1, 1.25, 1.5].map(function (f) {
-        var ml = cur * f * vol / (10000 * sp); // inverse of jarPpm
-        return { dose: String(Math.round(ml * 100) / 100), ph: '', turb: '', floc: '' };
+      var cur = App.parseNum(s.jarCurrentDose), vol = App.parseNum(s.jarVol), sp = App.parseNum(s.stockPct);
+      if (!(cur > 0) || !(vol > 0) || !(sp > 0)) {
+        App.setState({ bracketNote: 'Jars unchanged — enter the current dose, jar volume and stock strength first.' });
+        return;
+      }
+      var doses = [0.5, 0.75, 1, 1.25, 1.5].map(function (f) {
+        return Math.round(App.jarMl(cur * f) * 100) / 100; // 0.01 mL is the finest step the jar cards resolve
       });
-      App.setState({ jars: jars, winner: null });
+      var seen = {};
+      var degenerate = doses.some(function (ml) { if (ml <= 0 || seen[ml]) return true; seen[ml] = 1; return false; });
+      if (degenerate) {
+        App.setState({ bracketNote: 'Jars unchanged — at this dose and stock strength the 50–150% volumes collapse below 0.01 mL steps. Use a weaker stock or larger jars, then bracket again.' });
+        return;
+      }
+      var hasResults = s.winner !== null || s.jars.some(function (j) { return j.ph || j.turb || j.floc; });
+      if (hasResults && !window.confirm('Replace the current jars? Recorded pH / turbidity / floc results will be cleared.')) return;
+      var jars = doses.map(function (ml) { return { dose: String(ml), ph: '', turb: '', floc: '' }; });
+      App.setState({ jars: jars, winner: null, bracketNote: '' });
     },
 
     // products
@@ -485,13 +620,8 @@
     openProduct: function (el) { App.setState({ productId: el.dataset.id }); },
     backToProducts: function () { App.setState({ productId: null }); },
     useProductInCalc: function () {
-      var p = App.allProducts().find(function (x) { return x.id === App.state.productId; }) || {};
-      App.setState({
-        screen: 'calc', calcProductId: p.id,
-        form: (p.form === 'Powder') ? 'powder' : 'liquid',
-        density: p.density ? String(p.density) : App.state.density,
-        productId: null
-      });
+      var p = App.allProducts().find(function (x) { return x.id === App.state.productId; }) || null;
+      App.setState(Object.assign({ screen: 'calc', calcProductId: p ? p.id : '', productId: null }, App.productCalcPatch(p)));
     },
     startAddProduct: function () { App.setState({ showProductForm: true }); },
     cancelAddProduct: function () { App.setState({ showProductForm: false }); },
@@ -536,13 +666,8 @@
     },
     pickProduct: function (el) {
       var id = el.dataset.id;
-      var p = App.allProducts().find(function (x) { return x.id === id; });
-      App.setState({
-        calcProductId: id,
-        form: p ? (p.form === 'Powder' ? 'powder' : 'liquid') : App.state.form,
-        density: (p && p.density) ? String(p.density) : App.state.density,
-        productPickerOpen: false, productPickerQuery: ''
-      });
+      var p = App.allProducts().find(function (x) { return x.id === id; }) || null;
+      App.setState(Object.assign({ calcProductId: id, productPickerOpen: false, productPickerQuery: '' }, App.productCalcPatch(p)));
     },
     toggleCalcPumpPicker: function () {
       var open = !App.state.calcPumpPickerOpen;
@@ -573,14 +698,10 @@
     onFormLiquid: function () { App.setState({ form: 'liquid' }); },
     onFormPowder: function () { App.setState({ form: 'powder' }); },
     onSelectProduct: function (el) {
-      var p = App.allProducts().find(function (x) { return x.id === el.value; });
-      App.setState({
-        calcProductId: el.value,
-        form: p ? (p.form === 'Powder' ? 'powder' : 'liquid') : App.state.form,
-        density: (p && p.density) ? String(p.density) : App.state.density
-        // note: product selection no longer changes the calc mode — the user's
-        // Concentration/Sludge tab choice is left untouched.
-      });
+      var p = App.allProducts().find(function (x) { return x.id === el.value; }) || null;
+      // note: product selection no longer changes the calc mode — the user's
+      // Concentration/Sludge tab choice is left untouched.
+      App.setState(Object.assign({ calcProductId: el.value }, App.productCalcPatch(p)));
     },
     onPumpSelect: function () { App.setState({ pumpSource: 'select' }); },
     onPumpManual: function () { App.setState({ pumpSource: 'manual' }); },
@@ -608,9 +729,17 @@
     },
     setWinner: function (el) { App.setState({ winner: +el.dataset.i }); },
     useWinner: function () {
-      var wj = (App.state.winner !== null && App.state.jars[App.state.winner]) ? App.state.jars[App.state.winner] : null;
+      var s = App.state;
+      // A jar mg/L is only a full-scale dose for mg/L-on-flow products. For a
+      // dry-tonne-basis product there is no conversion without the solids
+      // balance — the winner card explains this instead of offering the button.
+      var jp = App.allProducts().find(function (x) { return x.id === s.jarProductId; });
+      if (jp && App.doseBasisOf(jp) !== 'mgL') return;
+      var wj = (s.winner !== null && s.jars[s.winner]) ? s.jars[s.winner] : null;
       var ppm = wj ? App.jarPpm(wj.dose) : NaN;
-      App.setState({ screen: 'calc', calcMode: 'conc', dose: App.fmt(ppm, 2) });
+      if (!isFinite(ppm)) return;
+      // plain string, not fmt(): locale grouping ('1,234.5') would misparse as 1
+      App.setState({ screen: 'calc', calcMode: 'conc', dose: String(Math.round(ppm * 100) / 100) });
     },
     startJarSave: function () { App.setState({ showJarSave: true, jarSaved: false }); },
     cancelJarSave: function () { App.setState({ showJarSave: false }); },
@@ -701,16 +830,25 @@
     cancelClient: function () { App.setState({ showClientForm: false, clientName: '', clientSite: '' }); },
     confirmClient: function () {
       var s = App.state;
-      if (!s.clientName.trim()) return;
+      var name = s.clientName.trim();
+      if (!name) return;
       var p = App.allProducts().find(function (x) { return x.id === s.calcProductId; });
-      var c = {
-        id: 'c' + Date.now(), name: s.clientName.trim(), site: s.clientSite.trim(),
+      var calcFields = {
         mode: s.calcMode, flow: s.flow, dose: s.dose, sludgeFlow: s.sludgeFlow, ds: s.ds, doseKg: s.doseKg, sludgeDensity: s.sludgeDensity,
         flowUnit: s.flowUnit, sludgeFlowUnit: s.sludgeFlowUnit,
         makedown: s.makedown, density: s.density, pumpMax: s.pumpMax, form: s.form,
         productId: s.calcProductId, productName: p ? p.name : ''
       };
-      var clients = [c].concat(s.clients);
+      if (s.clientSite.trim()) calcFields.site = s.clientSite.trim();
+      var clients;
+      var existing = App.findClientByName(s.clients, name);
+      if (existing) {
+        // this site already exists (e.g. readings saved from a playbook) —
+        // attach the calc to that record instead of splitting its history
+        clients = s.clients.map(function (c) { return c.id === existing.id ? Object.assign({}, c, calcFields) : c; });
+      } else {
+        clients = [Object.assign(App.newClient(name, s.clientSite.trim()), calcFields)].concat(s.clients);
+      }
       App.persist(clients);
       App.setState({ clients: clients, showClientForm: false, clientName: '', clientSite: '' });
     },

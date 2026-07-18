@@ -58,7 +58,7 @@ window.PLAYBOOKS = {
         'Jar testing, streaming current, zeta potential and pilot filtration are complementary control methods, not interchangeable ones (per the playbook brief, citing EPA guidance).'
       ],
       products: [{ label: 'Browse coagulants (alum · PACl · ferric)', filter: 'Coagulant' }],
-      actions: [{ act: 'guideToJars', label: 'Set up a jar test' }, { act: 'goCalc', label: 'Open dosing calc' }],
+      actions: [{ act: 'goJars', label: 'Set up a jar test' }, { act: 'guideToConcCalc', label: 'Open dosing calc' }],
       fields: [
         { k: 'turb', label: 'Turbidity', u: 'NTU' },
         { k: 'uv', label: 'UV254', u: '/cm' },
@@ -96,7 +96,7 @@ window.PLAYBOOKS = {
         'Best phosphorus removal does not sit at the lowest charge — metal salts also remove P by precipitation and adsorption onto metal-hydroxide solids. Judge P removal by residual ortho-P, not floc appearance.'
       ],
       products: [{ label: 'Browse coagulants (ferric · alum · PACl)', filter: 'Coagulant' }],
-      actions: [{ act: 'guideToJars', label: 'Set up a jar test' }, { act: 'goCalc', label: 'Open dosing calc' }],
+      actions: [{ act: 'goJars', label: 'Set up a jar test' }, { act: 'guideToConcCalc', label: 'Open dosing calc' }],
       fields: [
         { k: 'tss', label: 'TSS', u: 'mg/L' },
         { k: 'codt', label: 'Total COD', u: 'mg/L' },
@@ -127,6 +127,7 @@ window.PLAYBOOKS = {
         label: 'kg active polymer / t dry solids',
         body: 'Report per dry tonne, never as mg/L of sludge — otherwise a change in feed solids masquerades as a change in polymer performance. The Dosing Calc sludge mode works in these units.'
       },
+      progUnit: 'kgt',
       cautions: [
         'Matured polymer is shear-sensitive — record solution age and make-down strength with every test, or results are not comparable.'
       ],
@@ -179,7 +180,7 @@ window.PLAYBOOKS = {
         'No single charge measurement describes success in oily or coloured streams — industrial studies evaluate oil, COD, TSS and turbidity together (per the playbook brief).'
       ],
       products: [{ label: 'Browse coagulants & cationic organics', filter: 'Coagulant' }],
-      actions: [{ act: 'guideToJars', label: 'Set up a jar test' }],
+      actions: [{ act: 'goJars', label: 'Set up a jar test' }],
       fields: [
         { k: 'ph', label: 'pH', u: '' },
         { k: 'cond', label: 'Conductivity', u: 'µS/cm' },
@@ -215,6 +216,7 @@ window.PLAYBOOKS = {
         body: 'Dry-solids basis stops a change in slurry concentration masquerading as a dose change.',
         formulas: ['m(dry solids) = m(slurry) × %solids ÷ 100', 'Dose (g/t) = active polymer (g) ÷ dry solids (t)']
       },
+      progUnit: 'gt',
       cautions: [
         'Clay identity matters: salinity can improve settling for one clay system and impair another — kaolinite, bentonite and illite settle differently in saline water (per the brief). Conductivity is not a universal correction factor.',
         'High-pH seawater systems: one tailings study found impaired flocculation above ~pH 10.3 under its tested conditions — a site-specific finding, not a universal limit. Magnesium precipitation changes particle surface area and polymer requirement.'
