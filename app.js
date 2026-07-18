@@ -61,7 +61,7 @@
       np: { name: '', brand: '', type: 'Flocculant', charge: '', form: 'Powder', doseRange: '', doseUnit: 'mg/L on flow', density: '', makedown: '', ageing: '', application: '', makeup: '' },
       showPumpForm: false,
       npu: { model: '', brand: '', type: 'Solenoid diaphragm', maxFlow: '', maxPress: '', control: 'Digital', note: '' },
-      showJarSave: false, jarSaveClient: '', jarSaveNote: '', jarSaved: false,
+      showJarSave: false, jarSaveClient: '', jarSaveNote: '', jarSaved: false, jarSaveError: '', clientSaveError: '',
       guideId: null, guideChecks: {},
       guideReadings: {}, guideSaveClient: '', guideSaveName: '', guideSaved: false, guideSaveError: '',
       guideProgProductId: '', guideProgPickerOpen: false, guideProgPickerQuery: '',
@@ -103,9 +103,9 @@
       } catch (e) {}
     },
     persist: function (c) { try { localStorage.setItem('ctf_clients_v1', JSON.stringify(c)); return true; } catch (e) { return false; } },
-    persistPumps: function (p) { try { localStorage.setItem('ctf_pumps_v1', JSON.stringify(p)); } catch (e) {} },
-    persistProducts: function (p) { try { localStorage.setItem('ctf_products_v1', JSON.stringify(p)); } catch (e) {} },
-    persistTests: function (t) { try { localStorage.setItem('ctf_jartests_v1', JSON.stringify(t)); } catch (e) {} },
+    persistPumps: function (p) { try { localStorage.setItem('ctf_pumps_v1', JSON.stringify(p)); return true; } catch (e) { return false; } },
+    persistProducts: function (p) { try { localStorage.setItem('ctf_products_v1', JSON.stringify(p)); return true; } catch (e) { return false; } },
+    persistTests: function (t) { try { localStorage.setItem('ctf_jartests_v1', JSON.stringify(t)); return true; } catch (e) { return false; } },
 
     // ---- maths (verbatim port) ---------------------------------------------
     flowFactor: function (u) { var f = this.FLOW_UNITS.find(function (x) { return x.v === u; }); return f ? f.k : 1; },
@@ -394,21 +394,54 @@
       if (p.density) patch.density = String(p.density);
       return patch;
     },
+    // ---- unsaved-field tracking (guards the update auto-reload) -------------
+    // _snap records what each save actually persisted this session. Flags like
+    // guideSaved can't do this job: one playbook's save must not vouch for
+    // another playbook's readings, and a saved jar test must stop vouching the
+    // moment its jars are edited again. Not persisted — a reload loses the live
+    // state too, which is exactly what the guard exists to prevent.
+    _snap: { readings: {}, prog: {}, jars: '' },
+    progSig: function (slate) {
+      var hasData = String(slate.dose || '').trim() || String(slate.flow || '').trim() || slate.productId;
+      return hasData ? JSON.stringify([slate.productId || '', slate.dose || '', slate.doseUnit || '', slate.flow || '', slate.flowUnit || '']) : '';
+    },
+    liveProgSig: function () {
+      var s = this.state;
+      return this.progSig({ productId: s.guideProgProductId, dose: s.guideProgDose, doseUnit: s.guideProgDoseUnit, flow: s.guideProgFlow, flowUnit: s.guideProgFlowUnit });
+    },
+    jarsSig: function () {
+      var s = this.state;
+      return JSON.stringify([s.jars, s.winner, s.jarCurrentDose]);
+    },
     // index.html's controllerchange handler asks this before auto-reloading an
     // update: a mid-visit reload would destroy these memory-only entries.
     hasUnsavedFieldData: function () {
-      var s = this.state;
-      if (!s.guideSaved) {
-        for (var k in s.guideReadings) { if (String(s.guideReadings[k] || '').trim()) return true; }
-        if (String(s.guideProgDose || '').trim() || String(s.guideProgFlow || '').trim() || s.guideProgProductId) return true;
+      var s = this.state, snap = this._snap;
+      for (var k in s.guideReadings) {
+        if (String(s.guideReadings[k] || '').trim() && snap.readings[k] !== s.guideReadings[k]) return true;
+      }
+      if (s.guideProgFor) {
+        var liveSig = this.liveProgSig();
+        if (liveSig && snap.prog[s.guideProgFor] !== liveSig) return true;
       }
       for (var pid in s.guideProgByPb) {
-        var g = s.guideProgByPb[pid];
-        if (g && (String(g.dose || '').trim() || String(g.flow || '').trim() || g.productId)) return true;
+        var sig = this.progSig(s.guideProgByPb[pid] || {});
+        if (sig && snap.prog[pid] !== sig) return true;
       }
-      if (s.winner !== null) return true;
-      if (s.jars.some(function (j) { return j.ph || j.turb || j.floc; })) return true;
+      var jarsHaveData = s.winner !== null || String(s.jarCurrentDose || '').trim() !== '' ||
+        s.jars.some(function (j) { return j.ph || j.turb || j.floc; });
+      if (jarsHaveData && snap.jars !== this.jarsSig()) return true;
+      if (String(s.mgMl || '').trim()) return true; // bench entry has no save path
       return false;
+    },
+    // Record what a successful playbook save covered: this playbook's readings
+    // and the live programme slate. Other playbooks' entries stay unsaved.
+    _stampGuideSnap: function (pb) {
+      var s = this.state;
+      pb.fields.forEach(function (f) {
+        App._snap.readings[pb.id + ':' + f.k] = s.guideReadings[pb.id + ':' + f.k];
+      });
+      this._snap.prog[pb.id] = this.liveProgSig();
     },
 
     // ---- style factories (from design) -------------------------------------
@@ -437,7 +470,10 @@
     openGuide: function (el) {
       var id = el.dataset.id;
       var s = App.state;
-      var patch = { screen: 'guide', guideId: id, guideSaved: false, guideSaveError: '' };
+      // guideSaved survives re-opening the SAME playbook (nothing changed, so the
+      // banner is still true and Save stays disabled — re-enabling it here was a
+      // duplicate-entry path); switching playbooks clears it.
+      var patch = { screen: 'guide', guideId: id, guideSaved: id === s.guideProgFor ? s.guideSaved : false, guideSaveError: '' };
       // The programme entry belongs to one playbook (guideProgFor). Switching
       // playbooks parks the outgoing entry in guideProgByPb and restores this
       // playbook's own — navigation never wipes an entered dose, and value and
@@ -452,6 +488,7 @@
         }
         var pb = (window.PLAYBOOKS && window.PLAYBOOKS.list.find(function (x) { return x.id === id; })) || null;
         var saved = store[id] || null;
+        if (saved) delete store[id]; // the live slate owns it again — a stale copy would double-count as unsaved data
         patch.guideProgByPb = store;
         patch.guideProgFor = id;
         patch.guideProgProductId = saved ? saved.productId : '';
@@ -576,6 +613,17 @@
         return;
       }
       var entry = { date: new Date().toLocaleDateString('en-AU'), app: pb.name, values: vals, prog: prog };
+      // The record already holding exactly this entry (Save re-enabled by
+      // navigation with nothing changed) is a success, not a duplicate — a
+      // second identical append would only pollute the site history. Backstop
+      // to the disabled-while-guideSaved button.
+      var target = clients.find(function (c) { return c.id === cid; });
+      var latest = target && target.readings && target.readings[0];
+      if (latest && JSON.stringify(latest) === JSON.stringify(entry)) {
+        App._stampGuideSnap(pb);
+        App.setState({ guideSaved: true, guideSaveClient: cid, guideSaveError: '' });
+        return;
+      }
       clients = clients.map(function (c) {
         if (c.id !== cid) return c;
         var copy = Object.assign({}, c);
@@ -588,6 +636,7 @@
       }
       // guideSaved also disables the Save button until something is edited —
       // that is the double-tap guard (any input clears it via onGuideProgField/onGuideReading)
+      App._stampGuideSnap(pb);
       App.setState({ clients: clients, guideSaved: true, guideSaveClient: cid, guideSaveName: '', guideSaveError: '' });
     },
     // Optimisation retest: set the jars to 50–150% of the current full-scale dose.
@@ -610,7 +659,11 @@
         return;
       }
       var hasResults = s.winner !== null || s.jars.some(function (j) { return j.ph || j.turb || j.floc; });
-      if (hasResults && !window.confirm('Replace the current jars? Recorded pH / turbidity / floc results will be cleared.')) return;
+      if (hasResults && !window.confirm('Replace the current jars? Recorded pH / turbidity / floc results will be cleared.')) {
+        // declining is not a failure — a stale abstention note must not linger
+        if (s.bracketNote) App.setState({ bracketNote: '' });
+        return;
+      }
       var jars = doses.map(function (ml) { return { dose: String(ml), ph: '', turb: '', floc: '' }; });
       App.setState({ jars: jars, winner: null, bracketNote: '' });
     },
@@ -741,8 +794,8 @@
       // plain string, not fmt(): locale grouping ('1,234.5') would misparse as 1
       App.setState({ screen: 'calc', calcMode: 'conc', dose: String(Math.round(ppm * 100) / 100) });
     },
-    startJarSave: function () { App.setState({ showJarSave: true, jarSaved: false }); },
-    cancelJarSave: function () { App.setState({ showJarSave: false }); },
+    startJarSave: function () { App.setState({ showJarSave: true, jarSaved: false, jarSaveError: '' }); },
+    cancelJarSave: function () { App.setState({ showJarSave: false, jarSaveError: '' }); },
     confirmJarSave: function () {
       var s = App.state;
       var jp = App.allProducts().find(function (x) { return x.id === s.jarProductId; });
@@ -761,8 +814,12 @@
         note: s.jarSaveNote.trim()
       };
       var jarTests = [t].concat(s.jarTests);
-      App.persistTests(jarTests);
-      App.setState({ jarTests: jarTests, showJarSave: false, jarSaved: true, jarSaveNote: '' });
+      if (!App.persistTests(jarTests)) {
+        App.setState({ jarSaveError: 'Could not write to this device’s storage — the test is NOT saved. Free up space (or leave private browsing) and save again.' });
+        return;
+      }
+      App._snap.jars = App.jarsSig(); // this exact jar setup is now on record — safe for an update reload
+      App.setState({ jarTests: jarTests, showJarSave: false, jarSaved: true, jarSaveNote: '', jarSaveError: '' });
     },
     deleteJarTest: function (el) {
       var id = el.dataset.id;
@@ -827,7 +884,7 @@
     },
 
     // clients
-    cancelClient: function () { App.setState({ showClientForm: false, clientName: '', clientSite: '' }); },
+    cancelClient: function () { App.setState({ showClientForm: false, clientName: '', clientSite: '', clientSaveError: '' }); },
     confirmClient: function () {
       var s = App.state;
       var name = s.clientName.trim();
@@ -842,15 +899,21 @@
       if (s.clientSite.trim()) calcFields.site = s.clientSite.trim();
       var clients;
       var existing = App.findClientByName(s.clients, name);
+      // Merge only when it's unambiguously the same site: never across two
+      // different site labels, and never silently over an existing saved calc —
+      // that snapshot may be the only record of the site's programme.
+      if (existing && existing.site && s.clientSite.trim() && existing.site.trim().toLowerCase() !== s.clientSite.trim().toLowerCase()) existing = null;
+      if (existing && existing.mode && !window.confirm('“' + existing.name + '” already has a saved calculation. Replace it with this one? Cancel keeps this save as a separate client.')) existing = null;
       if (existing) {
-        // this site already exists (e.g. readings saved from a playbook) —
-        // attach the calc to that record instead of splitting its history
         clients = s.clients.map(function (c) { return c.id === existing.id ? Object.assign({}, c, calcFields) : c; });
       } else {
         clients = [Object.assign(App.newClient(name, s.clientSite.trim()), calcFields)].concat(s.clients);
       }
-      App.persist(clients);
-      App.setState({ clients: clients, showClientForm: false, clientName: '', clientSite: '' });
+      if (!App.persist(clients)) {
+        App.setState({ clientSaveError: 'Could not write to this device’s storage — the client is NOT saved. Free up space (or leave private browsing) and save again.' });
+        return;
+      }
+      App.setState({ clients: clients, showClientForm: false, clientName: '', clientSite: '', clientSaveError: '' });
     },
     deleteClient: function (el) {
       var id = el.dataset.id;
