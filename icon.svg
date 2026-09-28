@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="112" fill="#16211F"/>
+  <!-- droplet -->
+  <path d="M256 96 C 196 176, 152 224, 152 296 a 104 104 0 0 0 208 0 C 360 224, 316 176, 256 96 Z" fill="none" stroke="#4FE0B5" stroke-width="20" stroke-linejoin="round"/>
+  <!-- flask lines inside -->
+  <path d="M214 250 h84 M214 292 h84 M232 334 h48" stroke="#0C8577" stroke-width="16" stroke-linecap="round"/>
+</svg>
