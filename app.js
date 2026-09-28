@@ -1115,7 +1115,8 @@
       try {
         var file = (typeof File === 'function') ? new File([json], name, { type: 'application/json' }) : null;
         if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
-          navigator.share({ files: [file], title: 'Field Assistant backup' }).then(function () {
+          // file only: iOS saves a title/text as an extra .txt next to the backup
+          navigator.share({ files: [file] }).then(function () {
             App.markBackup();
             App.setState({ backupMsg: 'Backup shared. If you picked \u201cSave to Files\u201d, it is in the Files app.', backupText: '' });
           }, function (err) {
