@@ -68,6 +68,7 @@
       npu: { model: '', brand: '', type: 'Solenoid diaphragm', maxFlow: '', maxPress: '', control: 'Digital', note: '' },
       showJarSave: false, jarSaveClient: '', jarSaveNote: '', jarSaved: false, jarSaveError: '', clientSaveError: '',
       guideId: null, guideChecks: {},
+      guideObservedDate: '', guideObservedTime: '', guideObservedOffset: '',
       guideReadings: {}, guideSaveClient: '', guideSaveName: '', guideSaved: false, guideSaveError: '',
       guideProgProductId: '', guideProgPickerOpen: false, guideProgPickerQuery: '',
       guideProgDose: '', guideProgMassBasis: 'unknown', guideProgDoseUnit: 'mgL', guideProgFlow: '', guideProgFlowUnit: 'm3h',
@@ -110,10 +111,12 @@
     // next save overwrites it, so it can still be recovered from a backup file.
     load: function () {
       var self = this;
+      this._seenRaw = this._seenRaw || {};
       this.STORE_KEYS.forEach(function (k) {
         var raw = null;
         try { raw = localStorage.getItem(k.key); } catch (e) { return; }
-        if (raw == null || raw === '') return;
+        self._seenRaw[k.key] = raw;
+        if (raw == null || raw === '') { self.state[k.state] = []; return; }
         var parsed, ok = true;
         try { parsed = JSON.parse(raw); } catch (e) { ok = false; }
         var list = [];
@@ -122,9 +125,13 @@
           list = c.list;
           if (c.changed) ok = false;
         } else ok = false;
-        if (!ok) self.keepAside(k.key, raw);
+        if (!ok && !self.keepAside(k.key, raw)) {
+          self._protectedKeys = self._protectedKeys || {}; self._protectedKeys[k.key] = raw;
+          self.state.storageError = 'Damaged saved data is protected: its recovery copy could not be stored. Save a backup now; writes and restore are blocked until safe recovery.';
+        }
         self.state[k.state] = list;
       });
+      this.invalidateSavedSnapshots();
     },
     isRec: function (r) { return !!r && typeof r === 'object' && !Array.isArray(r); },
     // Drop entries the screens can't draw: non-object records, and in clients
@@ -163,14 +170,18 @@
           var n = localStorage.key(i);
           if (n && n.indexOf(key + '_corrupt') === 0) names.push(n);
         }
-        for (var j = 0; j < names.length; j++) if (localStorage.getItem(names[j]) === raw) return;
-        localStorage.setItem(names.indexOf(key + '_corrupt') < 0 ? key + '_corrupt' : key + '_corrupt_' + Date.now(), raw);
-      } catch (e) {}
+        for (var j = 0; j < names.length; j++) if (localStorage.getItem(names[j]) === raw) return true;
+        var aside = names.indexOf(key + '_corrupt') < 0 ? key + '_corrupt' : key + '_corrupt_' + Date.now();
+        localStorage.setItem(aside, raw);
+        return localStorage.getItem(aside) === raw;
+      } catch (e) { return false; }
     },
 
     // ---- backup / restore ---------------------------------------------------
     exportData: function () {
+      if (this._restoreRecovery) return JSON.parse(this._restoreRecovery);
       var s = this.state, data = {}, counts = {}, extra = {};
+      for (var protectedKey in (this._protectedKeys || {})) extra[protectedKey + '_protected_raw'] = this._protectedKeys[protectedKey];
       this.STORE_KEYS.forEach(function (k) {
         data[k.key] = s[k.state] || [];
         counts[k.count] = data[k.key].length;
@@ -188,9 +199,12 @@
 
     // Restore = merge. Records already on this phone are kept as they are; records
     // from the file with a new id are added; same id with different content is
-    // counted in `differ` (the phone's copy wins). A failed write rolls every key
-    // back, so storage is exactly as it was.
+    // counted in `differ` (the phone's copy wins). Failure attempts exact-byte
+    // rollback; unverifiable recovery stays visible and blocks further writes.
     importData: function (text) {
+      if (this._restoreRecovery) return { ok: false, error: 'Recovery is pending. Save the original recovery backup off-device before closing or reloading; further restore is blocked.' };
+      if (this._coordinated && !this._mutationActive) return { ok: false, error: 'Restore requires safe storage coordination. Use the Restore control; nothing was changed.' };
+      if (Object.keys(this._protectedKeys || {}).length) return { ok: false, error: 'Damaged original data is protected. Export a backup and recover the original before restoring; nothing was changed.' };
       var self = this;
       var NOT_BACKUP = 'That isn\u2019t a Field Assistant backup. Nothing was changed.';
       var obj;
@@ -231,20 +245,69 @@
         merged[k.key] = cur; added[k.count] = n; differ[k.count] = d;
       });
 
-      var before = {};
-      this.STORE_KEYS.forEach(function (k) { try { before[k.key] = localStorage.getItem(k.key); } catch (e) { before[k.key] = null; } });
+      var before = {}, next = {}, oldState = {}, oldSeen = this._seenRaw, attempted = [], recovery;
+      // Capture exact bytes before any write. Never spend scarce quota on a huge
+      // persistent pre-restore copy. This immutable text is session-only; if
+      // rollback fails the user must save it off-device BEFORE closing/reloading.
       try {
-        this.STORE_KEYS.forEach(function (k) { localStorage.setItem(k.key, JSON.stringify(merged[k.key])); });
-      } catch (e) {
+        var backup = this.exportData();
+        backup.extra = backup.extra || {};
+        // Export normally tolerates unreadable extras; a restore must not.
+        for (var bi = 0; bi < localStorage.length; bi++) {
+          var bn = localStorage.key(bi);
+          if (bn && bn.indexOf('ctf_') === 0 && !backup.data[bn]) backup.extra[bn] = localStorage.getItem(bn);
+        }
         this.STORE_KEYS.forEach(function (k) {
-          try { if (before[k.key] == null) localStorage.removeItem(k.key); else localStorage.setItem(k.key, before[k.key]); } catch (x) {}
+          before[k.key] = localStorage.getItem(k.key);
+          backup.extra[k.key + '_restore_original_raw'] = before[k.key];
+          next[k.key] = JSON.stringify(merged[k.key]);
+          oldState[k.state] = self.state[k.state];
         });
-        return { ok: false, error: 'Restore failed: not enough storage space on this phone. Nothing was changed.' };
+        recovery = JSON.stringify(backup);
+      } catch (e) { return { ok: false, error: 'Could not read or prepare the original saved data. Restore was not started; nothing was changed.' }; }
+      this._restoreRecovery = recovery;
+      try {
+        this.STORE_KEYS.forEach(function (k) {
+          attempted.push(k.key);
+          localStorage.setItem(k.key, next[k.key]);
+          if (localStorage.getItem(k.key) !== next[k.key]) throw new Error('Restore readback failed');
+        });
+        var patch = {}, seen = {};
+        this.STORE_KEYS.forEach(function (k) { patch[k.state] = merged[k.key]; seen[k.key] = next[k.key]; });
+        this._seenRaw = seen;
+        this.setState(patch);
+        this._restoreRecovery = null;
+        return { ok: true, added: added, differ: differ };
+      } catch (e) {
+        // First revert quota-consuming growth (or remove failed new writes),
+        // including a setter that wrote then threw. Only then restore larger
+        // originals. In-place shrink avoids needless key removal. Forward-order
+        // restoration can itself exceed quota while an imported jar still fits.
+        attempted.forEach(function (key) {
+          try {
+            var current = localStorage.getItem(key);
+            if (current === before[key]) return;
+            if (before[key] == null) localStorage.removeItem(key);
+            else if (current != null && current.length >= before[key].length) localStorage.setItem(key, before[key]);
+          } catch (x) { try { localStorage.removeItem(key); } catch (y) {} }
+        });
+        attempted.forEach(function (key) {
+          try {
+            if (localStorage.getItem(key) === before[key]) return;
+            if (before[key] == null) localStorage.removeItem(key); else localStorage.setItem(key, before[key]);
+          } catch (x) {}
+        });
+        var exact = false;
+        try { exact = this.STORE_KEYS.every(function (k) { return localStorage.getItem(k.key) === before[k.key]; }); } catch (x) {}
+        this.STORE_KEYS.forEach(function (k) { self.state[k.state] = oldState[k.state]; });
+        var bookkeeping = true;
+        try { this._seenRaw = oldSeen; } catch (x) { bookkeeping = false; }
+        if (exact && bookkeeping) { this._restoreRecovery = null; return { ok: false, error: 'Restore failed. Original saved bytes were verified unchanged. Nothing was changed.' }; }
+        this.state.backupText = recovery;
+        this.state.backupMsg = 'Original pre-restore backup — save this file or copy the text off-device NOW. This recovery copy exists only in this open session; do not close or reload.';
+        if (exact) return { ok: false, error: 'Restore failed. Original storage bytes were verified unchanged, but session bookkeeping failed. Save the original recovery backup off-device now; further writes are blocked. Do not close or reload.' };
+        return { ok: false, error: 'Restore failed and rollback could not be verified. Saved storage may have changed. Original bytes are retained in the recovery backup below; save it off-device now. Do not close or reload. Further saved-data writes are blocked.' };
       }
-      var patch = {};
-      this.STORE_KEYS.forEach(function (k) { patch[k.state] = merged[k.key]; });
-      this.setState(patch);
-      return { ok: true, added: added, differ: differ };
     },
 
     // Ask the browser not to evict saved data under storage pressure (best effort).
@@ -258,10 +321,130 @@
       } catch (e) { return Promise.resolve(false); }
     },
 
-    persist: function (c) { try { localStorage.setItem('ctf_clients_v1', JSON.stringify(c)); return true; } catch (e) { return false; } },
-    persistPumps: function (p) { try { localStorage.setItem('ctf_pumps_v1', JSON.stringify(p)); return true; } catch (e) { return false; } },
-    persistProducts: function (p) { try { localStorage.setItem('ctf_products_v1', JSON.stringify(p)); return true; } catch (e) { return false; } },
-    persistTests: function (t) { try { localStorage.setItem('ctf_jartests_v1', JSON.stringify(t)); return true; } catch (e) { return false; } },
+    // IndexedDB readwrite transactions on one shared store serialize mounted
+    // tabs, including browsers without Web Locks. Saved bytes remain in the four
+    // localStorage keys. No lease, timeout takeover or read/write "CAS" fiction.
+    // All list writes execute synchronously inside the request callback while
+    // this transaction owns the store. Old releases do not obey this protocol:
+    // close/update them before editing (their writes cannot be made safe here).
+    mutateSaved: function (keys, action, refresh) {
+      var self = this;
+      if (!this._coordinated) return action(); // unmounted non-browser test/runtime
+      if (this._mutationBusy) { this.setState({ pumpLoading: false, storageError: 'Another storage action is in progress — this action was NOT saved or deleted. Keep your entries and explicitly retry when it finishes.' }); return; }
+      var expected = {}, db = null, tx = null, ended = false, ran = false;
+      keys.forEach(function (key) { expected[key] = self._seenRaw[key]; });
+      function finish(message) {
+        if (ended) return;
+        ended = true; clearTimeout(timer); self._mutationBusy = false;
+        if (db) db.close();
+        if (message) self.setState({ storageError: message, pumpLoading: false });
+      }
+      function unavailable() { finish('Safe storage coordination is unavailable — nothing was saved or deleted. Keep your entries and export a backup. Enable IndexedDB / leave private browsing, then retry. No unsafe single-tab fallback is used.'); }
+      this._mutationBusy = true;
+      var timer = setTimeout(function () {
+        if (tx && !ran) { try { tx.abort(); } catch (e) {} }
+        finish(ran ? 'Storage coordination was interrupted after the action. Check saved records and export a backup before retrying.' : 'Storage coordination is blocked or busy — nothing was saved or deleted. Keep your entries; close other editing tabs and retry.');
+      }, 8000);
+      try {
+        if (!window.indexedDB) { unavailable(); return; }
+        var open = window.indexedDB.open('field-assistant-mutations-v1', 1);
+        open.onupgradeneeded = function () { open.result.createObjectStore('mutex'); };
+        open.onerror = unavailable;
+        open.onblocked = unavailable;
+        open.onsuccess = function () {
+          db = open.result;
+          if (ended) { db.close(); return; }
+          db.onversionchange = function () { db.close(); };
+          try {
+            tx = db.transaction(['mutex'], 'readwrite');
+            tx.oncomplete = function () { finish(); };
+            tx.onabort = tx.onerror = function () { if (ran) finish('Storage coordination was interrupted after the action. Check saved records and export a backup before retrying.'); else unavailable(); };
+            tx.objectStore('mutex').get('lock').onsuccess = function () {
+              if (ended) return;
+              try {
+                var stale = !refresh && keys.some(function (key) { return localStorage.getItem(key) !== expected[key]; });
+                if (stale) { self.setState({ storageConflict: true, pumpLoading: false, storageError: 'Saved records changed in another tab. This action was NOT saved or deleted; your entries are kept. Refresh saved lists, review the changed record, then explicitly retry.' }); return; }
+                var ambiguous = keys.some(function (key) {
+                  var spec = self.STORE_KEYS.find(function (k) { return k.key === key; }), seen = {};
+                  return spec && (self.state[spec.state] || []).some(function (r) {
+                    if (r.id == null) return false;
+                    var id = 'id:' + r.id; if (Object.prototype.hasOwnProperty.call(seen, id)) return true; seen[id] = true; return false;
+                  });
+                });
+                if (ambiguous && !refresh) { self.setState({ storageError: 'Duplicate record IDs make this action ambiguous — nothing was saved or deleted. Export a backup and resolve the duplicate identities before editing. Original records are retained.' }); return; }
+                self._mutationActive = true; ran = true;
+                action();
+              } catch (e) { finish('Storage action could not finish. Check saved records and export a backup before retrying.'); }
+              finally { self._mutationActive = false; }
+            };
+          } catch (e) { unavailable(); }
+        };
+      } catch (e) { unavailable(); }
+    },
+    refreshSavedLists: function () {
+      var self = this;
+      if (this._restoreRecovery) { this.setState({ storageError: 'Recovery is pending. Save the original backup off-device now; refresh is blocked to retain the recovery state.' }); return; }
+      this.mutateSaved(this.STORE_KEYS.map(function (k) { return k.key; }), function () {
+        self.load(); self.state.storageConflict = false;
+        if (!Object.keys(self._protectedKeys || {}).length) self.state.storageError = '';
+        self.render();
+      }, true);
+    },
+    writeList: function (key, list) {
+      if (this._restoreRecovery) return false;
+      if (this._coordinated && !this._mutationActive) return false;
+      if (this._protectedKeys && Object.prototype.hasOwnProperty.call(this._protectedKeys, key)) return false;
+      try {
+        var raw = JSON.stringify(list); localStorage.setItem(key, raw);
+        if (localStorage.getItem(key) !== raw) return false;
+        this._seenRaw = this._seenRaw || {}; this._seenRaw[key] = raw;
+        return true;
+      } catch (e) { return false; }
+    },
+    protectedStorageWarning: function () {
+      return Object.keys(this._protectedKeys || {}).length ? 'Damaged saved data is protected: its recovery copy could not be stored. Save a backup now; writes to protected lists and restore are blocked until safe recovery.' : '';
+    },
+    persist: function (c) { return this.writeList('ctf_clients_v1', c); },
+    persistPumps: function (p) { return this.writeList('ctf_pumps_v1', p); },
+    persistProducts: function (p) { return this.writeList('ctf_products_v1', p); },
+    persistTests: function (t) { return this.writeList('ctf_jartests_v1', t); },
+
+    observation: function () {
+      var s = this.state, date = String(s.guideObservedDate || '').trim(), time = String(s.guideObservedTime || '').trim(), offset = String(s.guideObservedOffset || '').trim();
+      var bad = { error: 'Enter a real observation date (YYYY-MM-DD), time (HH:MM) and explicit UTC offset (+10:00, -04:00 or +00:00). Leave time blank if unknown; save time is recorded separately.' };
+      if (!date && !time && !offset) return { observedAt: null, observedDate: null, observationOffset: null };
+      if (!this.validObservationDate(date)) return bad;
+      if (!time && !offset) return { observedAt: null, observedDate: date, observationOffset: null };
+      var t = /^(\d{2}):(\d{2})$/.exec(time);
+      if (!t || +t[1] > 23 || +t[2] > 59 || !this.validObservationOffset(offset)) return bad;
+      return { observedAt: date + 'T' + time + ':00' + offset, observedDate: date, observationOffset: offset };
+    },
+    validObservationDate: function (date) {
+      var d = typeof date === 'string' && /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+      if (!d || +d[1] < 1000) return false;
+      var cal = new Date(Date.UTC(+d[1], +d[2] - 1, +d[3]));
+      return cal.getUTCFullYear() === +d[1] && cal.getUTCMonth() === +d[2] - 1 && cal.getUTCDate() === +d[3];
+    },
+    validObservationOffset: function (offset) {
+      var z = typeof offset === 'string' && /^([+-])(\d{2}):(\d{2})$/.exec(offset);
+      return !!z && +z[2] <= 14 && +z[3] <= 59 && (+z[2] !== 14 || +z[3] === 0) && offset !== '-00:00';
+    },
+    // Presentation validates imported/startup metadata without rewriting history.
+    historicalObservation: function (r) {
+      var at = r.observedAt, date = r.observedDate, offset = r.observationOffset;
+      var unknown = { observedAt: '', observedDate: '', invalid: !!(at || date || offset) };
+      if (at != null && at !== '') {
+        var m = typeof at === 'string' && /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):00([+-]\d{2}:\d{2})$/.exec(at);
+        if (!m || !this.validObservationDate(m[1]) || +m[2] > 23 || +m[3] > 59 || !this.validObservationOffset(m[4])) return unknown;
+        if ((date != null && date !== m[1]) || (offset != null && offset !== m[4])) return unknown;
+        return { observedAt: at, observedDate: m[1], invalid: false };
+      }
+      if (offset != null && offset !== '') return unknown;
+      if (date != null && date !== '') return this.validObservationDate(date) ? { observedAt: '', observedDate: date, invalid: false } : unknown;
+      return unknown;
+    },
+    observationSig: function () { var s = this.state; return JSON.stringify([s.guideObservedDate || '', s.guideObservedTime || '', s.guideObservedOffset || '']); },
+    readingSig: function (r) { return JSON.stringify([r.date, r.app, r.values, r.prog, r.observedAt || null, r.observedDate || null, r.observationOffset || null]); },
 
     // ---- maths (verbatim port) ---------------------------------------------
     flowFactor: function (u) { var f = this.FLOW_UNITS.find(function (x) { return x.v === u; }); return f ? f.k : NaN; },
@@ -664,7 +847,9 @@
       // A catch belongs to the pump, media and operating setup it measured.
       if (['selectedCalcPumpId', 'pumpSource', 'pumpMax', 'calcProductId', 'form', 'feedBasis', 'density', 'makedown', 'calcMode', 'flow', 'flowUnit', 'dose', 'sludgeFlow', 'sludgeFlowUnit', 'ds', 'doseKg', 'sludgeDensity', 'foundPumps', 'customProducts'].some(function (key) { return Object.prototype.hasOwnProperty.call(patch, key) && patch[key] !== s[key]; })) { patch.calMl = ''; patch.calSec = ''; }
       if (['jarVol', 'stockPct', 'jarVolumeBasis', 'jars', 'winner', 'jarProductId'].some(function (key) { return Object.prototype.hasOwnProperty.call(patch, key) && patch[key] !== s[key]; })) patch.jarSaved = false;
-      Object.assign(s, patch); this.render();
+      Object.assign(s, patch);
+      if (Object.prototype.hasOwnProperty.call(patch, 'clients') || Object.prototype.hasOwnProperty.call(patch, 'jarTests')) this.invalidateSavedSnapshots();
+      this.render();
     },
 
     // User preparation edits are one guarded transition. History is never mutated.
@@ -684,13 +869,22 @@
 
     // Fresh client record. Both save paths (calc + playbook readings) build on
     // this so the shape and id scheme can never diverge.
-    newClient: function (name, site) {
-      return { id: 'c' + Date.now(), name: name, site: site || '', readings: [] };
+    recordId: function (prefix, list) {
+      var base = prefix + Date.now(), id = base, suffix = 0;
+      while ((list || []).some(function (r) { return r.id === id; })) id = base + '-' + (++suffix);
+      return id;
     },
-    findClientByName: function (clients, name) {
+    newClient: function (name, site) {
+      return { id: this.recordId('c', this.state.clients), name: name, site: site || '', readings: [] };
+    },
+    findClientByName: function (clients, name, site) {
       var n = String(name || '').trim().toLowerCase();
       if (!n) return null;
-      return clients.find(function (c) { return String(c.name || '').trim().toLowerCase() === n; }) || null;
+      var matches = clients.filter(function (c) {
+        return String(c.name || '').trim().toLowerCase() === n &&
+          (site === undefined || String(c.site || '').trim().toLowerCase() === String(site || '').trim().toLowerCase());
+      });
+      return matches.length === 1 ? matches[0] : null;
     },
     // The patch a product selection applies to the calculator (form + density).
     productCalcPatch: function (p) {
@@ -728,11 +922,20 @@
     },
     // index.html's controllerchange handler asks this before auto-reloading an
     // update: a mid-visit reload would destroy these memory-only entries.
+    calcInputSig: function () {
+      var s = this.state;
+      return JSON.stringify(['calcMode', 'calcProductId', 'form', 'flow', 'dose', 'flowUnit', 'sludgeFlow', 'sludgeFlowUnit', 'ds', 'doseKg', 'sludgeDensity', 'makedown', 'density', 'feedBasis', 'pumpMax', 'pumpSource', 'selectedCalcPumpId', 'calMl', 'calSec'].map(function (k) { return s[k]; }));
+    },
     hasUnsavedFieldData: function () {
+      if (this._mutationBusy || this._restoreRecovery) return true;
       var s = this.state, snap = this._snap;
+      if (s.showClientForm || s.showProductForm || s.showPumpForm || s.showJarSave) return true;
+      // Conservative: a changed calculation can include memory-only catch inputs.
+      if (this.calcInputSig() !== this._initialCalcSig) return true;
       for (var k in s.guideReadings) {
         if (String(s.guideReadings[k] || '').trim() && snap.readings[k] !== s.guideReadings[k]) return true;
       }
+      if (s.guideProgFor && (s.guideObservedDate || s.guideObservedTime || s.guideObservedOffset || (snap.observation && snap.observation[s.guideProgFor])) && (!snap.observation || snap.observation[s.guideProgFor] !== this.observationSig())) return true;
       if (s.guideProgFor) {
         var liveSig = this.liveProgSig();
         if (liveSig && snap.prog[s.guideProgFor] !== liveSig) return true;
@@ -740,6 +943,8 @@
       for (var pid in s.guideProgByPb) {
         var sig = this.progSig(s.guideProgByPb[pid] || {});
         if (sig && snap.prog[pid] !== sig) return true;
+        var parked = s.guideProgByPb[pid] || {};
+        if ((parked.observedDate || parked.observedTime || parked.observedOffset || (snap.observation && snap.observation[pid])) && (!snap.observation || snap.observation[pid] !== JSON.stringify([parked.observedDate || '', parked.observedTime || '', parked.observedOffset || '']))) return true;
       }
       var jarsHaveData = s.winner !== null || String(s.jarCurrentDose || '').trim() !== '' ||
         s.jars.some(function (j) { return j.ph || j.turb || j.floc; });
@@ -747,14 +952,45 @@
       if (String(s.mgMl || '').trim()) return true; // bench entry has no save path
       return false;
     },
+    clientCalcSig: function (c) {
+      return JSON.stringify(['mode', 'flow', 'dose', 'sludgeFlow', 'ds', 'doseKg', 'sludgeDensity', 'flowUnit', 'sludgeFlowUnit', 'makedown', 'density', 'pumpMax', 'pumpSource', 'selectedCalcPumpId', 'pumpCapacityVersion', 'form', 'feedBasis', 'productId', 'productName'].map(function (k) { return c[k]; }));
+    },
+    // A signature may vouch for a draft only while its exact durable backing
+    // still exists. Refresh and local mutations share this check. Inputs and
+    // parked slates are NEVER cleared or turned into manufactured history.
+    invalidateSavedSnapshots: function () {
+      var s = this.state, snap = this._snap;
+      var backing = snap.guideBacking || {};
+      Object.keys(backing).forEach(function (pid) {
+        var saved = backing[pid];
+        var client = s.clients.find(function (c) { return c.id === saved.clientId; });
+        if (client && (client.readings || []).some(function (r) { return JSON.stringify(r) === saved.reading; })) return;
+        Object.keys(snap.readings).forEach(function (key) { if (key.indexOf(pid + ':') === 0) delete snap.readings[key]; });
+        delete snap.prog[pid];
+        if (snap.observation) delete snap.observation[pid];
+        delete backing[pid];
+        if (s.guideProgFor === pid) s.guideSaved = false;
+      });
+      if (snap.calcBacking) {
+        var c = s.clients.find(function (r) { return r.id === snap.calcBacking.id; });
+        if (!c || this.clientCalcSig(c) !== snap.calcBacking.sig) { this._initialCalcSig = null; delete snap.calcBacking; }
+      }
+      if (snap.jarBacking && !s.jarTests.some(function (t) { return t.id === snap.jarBacking.id && JSON.stringify(t) === snap.jarBacking.record; })) {
+        snap.jars = ''; delete snap.jarBacking; s.jarSaved = false;
+      }
+    },
     // Record what a successful playbook save covered: this playbook's readings
     // and the live programme slate. Other playbooks' entries stay unsaved.
-    _stampGuideSnap: function (pb) {
+    _stampGuideSnap: function (pb, clientId, reading) {
       var s = this.state;
       pb.fields.forEach(function (f) {
         App._snap.readings[pb.id + ':' + f.k] = s.guideReadings[pb.id + ':' + f.k];
       });
       this._snap.prog[pb.id] = this.liveProgSig();
+      this._snap.observation = this._snap.observation || {};
+      this._snap.observation[pb.id] = this.observationSig();
+      this._snap.guideBacking = this._snap.guideBacking || {};
+      this._snap.guideBacking[pb.id] = { clientId: clientId, reading: JSON.stringify(reading) };
     },
 
     // ---- style factories (from design) -------------------------------------
@@ -768,6 +1004,8 @@
       return { flex: 1, border: 'none', cursor: 'pointer', borderRadius: '8px', padding: '9px 6px', fontSize: '12.5px', fontWeight: 700, background: active ? '#0C8577' : 'transparent', color: active ? '#FFF' : '#6B776F' };
     }
   };
+
+  App._initialCalcSig = App.calcInputSig();
 
   // ============================ HANDLERS =====================================
   var H = {
@@ -796,7 +1034,8 @@
         if (s.guideProgFor) {
           store[s.guideProgFor] = {
             productId: s.guideProgProductId, dose: s.guideProgDose, doseUnit: s.guideProgDoseUnit,
-            flow: s.guideProgFlow, flowUnit: s.guideProgFlowUnit, massBasis: s.guideProgMassBasis
+            flow: s.guideProgFlow, flowUnit: s.guideProgFlowUnit, massBasis: s.guideProgMassBasis,
+            observedDate: s.guideObservedDate, observedTime: s.guideObservedTime, observedOffset: s.guideObservedOffset
           };
         }
         var pb = (window.PLAYBOOKS && window.PLAYBOOKS.list.find(function (x) { return x.id === id; })) || null;
@@ -804,6 +1043,9 @@
         if (saved) delete store[id]; // the live slate owns it again — a stale copy would double-count as unsaved data
         patch.guideProgByPb = store;
         patch.guideProgFor = id;
+        patch.guideObservedDate = saved ? (saved.observedDate || '') : '';
+        patch.guideObservedTime = saved ? (saved.observedTime || '') : '';
+        patch.guideObservedOffset = saved ? (saved.observedOffset || '') : '';
         patch.guideProgProductId = saved ? saved.productId : '';
         patch.guideProgDose = saved ? saved.dose : '';
         patch.guideProgMassBasis = saved && saved.massBasis ? saved.massBasis : 'unknown';
@@ -837,6 +1079,7 @@
     onGuideProgField: function (el) {
       var patch = { guideSaved: false, guideSaveError: '' };
       patch[el.dataset.f] = el.value;
+      if (el.dataset.f === 'guideSaveName') patch.guideSaveClient = '';
       App.setState(patch);
     },
     onGuideProgSelect: function (el) {
@@ -928,7 +1171,9 @@
       if (!cid && newName) {
         // a site already on file under this name gets the readings appended —
         // never a second record splitting the site's history
-        var existing = App.findClientByName(clients, newName);
+        var matches = clients.filter(function (c) { return String(c.name || '').trim().toLowerCase() === newName.toLowerCase(); });
+        if (matches.length > 1) { App.setState({ guideSaveError: 'More than one client has this name. Choose the exact client/site from the list — nothing was saved.' }); return; }
+        var existing = matches[0];
         if (existing) cid = existing.id;
         else { var nc = App.newClient(newName); clients = [nc].concat(clients); cid = nc.id; }
       }
@@ -936,18 +1181,21 @@
         App.setState({ guideSaveError: 'Choose a client or type a new client name first — nothing was saved.' });
         return;
       }
-      var entry = { date: new Date().toLocaleDateString('en-AU'), app: pb.name, values: vals, prog: prog };
+      var observation = App.observation();
+      if (observation.error) { App.setState({ guideSaveError: observation.error }); return; }
+      var entry = Object.assign({ date: observation.observedDate || 'Observation date unknown', app: pb.name, values: vals, prog: prog }, observation);
       // The record already holding exactly this entry (Save re-enabled by
       // navigation with nothing changed) is a success, not a duplicate — a
       // second identical append would only pollute the site history. Backstop
       // to the disabled-while-guideSaved button.
       var target = clients.find(function (c) { return c.id === cid; });
       var latest = target && target.readings && target.readings[0];
-      if (latest && JSON.stringify(latest) === JSON.stringify(entry)) {
-        App._stampGuideSnap(pb);
+      if (latest && App.readingSig(latest) === App.readingSig(entry)) {
+        App._stampGuideSnap(pb, cid, latest);
         App.setState({ guideSaved: true, guideSaveClient: cid, guideSaveError: '' });
         return;
       }
+      entry.savedAt = new Date().toISOString();
       clients = clients.map(function (c) {
         if (c.id !== cid) return c;
         var copy = Object.assign({}, c);
@@ -960,7 +1208,7 @@
       }
       // guideSaved also disables the Save button until something is edited —
       // that is the double-tap guard (any input clears it via onGuideProgField/onGuideReading)
-      App._stampGuideSnap(pb);
+      App._stampGuideSnap(pb, cid, entry);
       App.setState({ clients: clients, guideSaved: true, guideSaveClient: cid, guideSaveName: '', guideSaveError: '' });
     },
     // Optimisation retest: set the jars to 50–150% of the current full-scale dose.
@@ -1017,7 +1265,7 @@
       var tintText = type === 'Coagulant' ? '#B05A28' : (type === 'Flocculant' ? '#2C7A45' : '#1D5F99');
       var tag = (np.name.replace(/[^A-Za-z0-9]/g, '').slice(0, 3) || 'NEW').toUpperCase();
       var prod = {
-        id: 'up' + Date.now(), custom: true, tag: tag, tint: tint, tintText: tintText,
+        id: App.recordId('up', App.allProducts()), custom: true, tag: tag, tint: tint, tintText: tintText,
         name: np.name.trim(), subtitle: (np.charge.trim() || type) + ' · ' + np.form,
         brand: np.brand.trim() || 'Custom entry', type: type, charge: np.charge.trim() || '—', form: np.form,
         densityText: np.density ? ('~' + np.density + ' kg/L') : '—',
@@ -1028,14 +1276,16 @@
         density: density > 0 ? density : null, verified: 'custom'
       };
       var customProducts = [prod].concat(App.state.customProducts);
-      App.persistProducts(customProducts);
-      App.setState({ customProducts: customProducts, showProductForm: false, productSaveError: '', np: { name: '', brand: '', type: 'Flocculant', charge: '', form: 'Powder', doseRange: '', doseUnit: 'mg/L on flow', density: '', makedown: '', ageing: '', application: '', makeup: '' } });
+      if (!App.persistProducts(customProducts)) { App.setState({ storageError: 'Could not write to this device’s storage — the product is NOT saved. Keep this form and try again after backing up/freeing space.' }); return; }
+      App.setState({ storageError: '', customProducts: customProducts, showProductForm: false, productSaveError: '', np: { name: '', brand: '', type: 'Flocculant', charge: '', form: 'Powder', doseRange: '', doseUnit: 'mg/L on flow', density: '', makedown: '', ageing: '', application: '', makeup: '' } });
     },
     deleteProduct: function (el) {
       var id = el.dataset.id;
+      var record = App.state.customProducts.find(function (r) { return r.id === id; });
+      if (!record || !window.confirm('Delete custom product “' + (record.name || id) + '”? This cannot be undone.')) return;
       var customProducts = App.state.customProducts.filter(function (p) { return p.id !== id; });
-      App.persistProducts(customProducts);
-      App.setState({ customProducts: customProducts, productId: (App.state.productId === id ? null : App.state.productId) });
+      if (!App.persistProducts(customProducts)) { App.setState({ storageError: 'Could not write to this device’s storage — the record is NOT deleted. Save a backup, free space and try again.' }); return; }
+      App.setState({ storageError: App.protectedStorageWarning(), customProducts: customProducts, productId: (App.state.productId === id ? null : App.state.productId) });
     },
 
     // calc
@@ -1136,7 +1386,7 @@
       var wj = (s.winner !== null && s.jars[s.winner]) ? s.jars[s.winner] : null;
       var wPpm = wj ? App.jarPpm(wj.dose) : NaN;
       var t = {
-        id: 'jt' + Date.now(),
+        id: App.recordId('jt', s.jarTests),
         date: new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }),
         clientId: s.jarSaveClient || '', clientName: client ? client.name : '',
         productId: s.jarProductId || '', productName: jp ? jp.name : 'Generic',
@@ -1153,13 +1403,17 @@
         return;
       }
       App._snap.jars = App.jarsSig(); // this exact jar setup is now on record — safe for an update reload
+      App._snap.jarBacking = { id: t.id, record: JSON.stringify(t) };
       App.setState({ jarTests: jarTests, showJarSave: false, jarSaved: true, jarSaveNote: '', jarSaveError: '' });
     },
     deleteJarTest: function (el) {
       var id = el.dataset.id;
+      var record = App.state.jarTests.find(function (r) { return r.id === id; });
+      if (!record || !window.confirm('Delete jar test “' + (record.clientName || id) + '”? This cannot be undone.')) return;
       var jarTests = App.state.jarTests.filter(function (t) { return t.id !== id; });
-      App.persistTests(jarTests);
-      App.setState({ jarTests: jarTests });
+      if (!App.persistTests(jarTests)) { App.setState({ storageError: 'Could not write to this device’s storage — the record is NOT deleted. Save a backup, free space and try again.' }); return; }
+      App._snap.jars = '';
+      App.setState({ jarTests: jarTests, jarSaved: false, storageError: App.protectedStorageWarning() });
     },
 
     // pumps
@@ -1169,20 +1423,22 @@
     confirmAddPump: function () {
       var n = App.state.npu; if (!n.model.trim()) return;
       var pump = {
-        id: 'up' + Date.now(), mine: true, tag: 'MINE', tint: '#ECF7F3', tintText: '#0C8577',
+        id: App.recordId('up', App.allPumps()), mine: true, tag: 'MINE', tint: '#ECF7F3', tintText: '#0C8577',
         model: n.model.trim(), brand: n.brand.trim() || '—', type: n.type,
         maxFlow: n.maxFlow.trim() || '—', maxPress: n.maxPress.trim() || '—',
         control: n.control, note: n.note.trim() || 'Added manually from datasheet.', verified: 'datasheet'
       };
       var foundPumps = [pump].concat(App.state.foundPumps);
-      App.persistPumps(foundPumps);
-      App.setState({ foundPumps: foundPumps, showPumpForm: false, npu: { model: '', brand: '', type: 'Solenoid diaphragm', maxFlow: '', maxPress: '', control: 'Digital', note: '' } });
+      if (!App.persistPumps(foundPumps)) { App.setState({ storageError: 'Could not write to this device’s storage — the pump is NOT saved. Keep this form and try again after backing up/freeing space.' }); return; }
+      App.setState({ storageError: '', foundPumps: foundPumps, showPumpForm: false, npu: { model: '', brand: '', type: 'Solenoid diaphragm', maxFlow: '', maxPress: '', control: 'Digital', note: '' } });
     },
     removePump: function (el) {
       var id = el.dataset.id;
+      var record = App.state.foundPumps.find(function (r) { return r.id === id; });
+      if (!record || !window.confirm('Delete pump “' + (record.model || id) + '”? This cannot be undone.')) return;
       var foundPumps = App.state.foundPumps.filter(function (p) { return p.id !== id; });
-      App.persistPumps(foundPumps);
-      App.setState({ foundPumps: foundPumps });
+      if (!App.persistPumps(foundPumps)) { App.setState({ storageError: 'Could not write to this device’s storage — the record is NOT deleted. Save a backup, free space and try again.' }); return; }
+      App.setState({ storageError: App.protectedStorageWarning(), foundPumps: foundPumps });
     },
     lookupPump: function () {
       var query = (App.state.pumpQuery || '').trim();
@@ -1196,14 +1452,16 @@
             var m = cleaned.match(/\{[\s\S]*\}/);
             var j = JSON.parse(m ? m[0] : cleaned);
             var pump = {
-              id: 'f' + Date.now(), ai: true, tag: 'AI', tint: '#EDE7F7', tintText: '#6A4CA0',
+              id: App.recordId('f', App.allPumps()), ai: true, tag: 'AI', tint: '#EDE7F7', tintText: '#6A4CA0',
               model: j.model || query, brand: j.brand || '—', type: j.type || '—',
               maxFlow: j.maxFlow || '—', maxPress: j.maxPress || '—', control: j.control || '—',
               note: j.note || '', verified: 'ai'
             };
-            var foundPumps = [pump].concat(App.state.foundPumps);
-            App.persistPumps(foundPumps);
-            App.setState({ foundPumps: foundPumps, pumpLoading: false, pumpQuery: pump.model });
+            App.mutateSaved(['ctf_pumps_v1'], function () {
+              var foundPumps = [pump].concat(App.state.foundPumps);
+              if (!App.persistPumps(foundPumps)) { App.setState({ pumpLoading: false, storageError: 'Could not write to this device’s storage — the lookup pump is NOT saved. Keep the query and try again after backing up/freeing space.' }); return; }
+              App.setState({ storageError: '', foundPumps: foundPumps, pumpLoading: false, pumpQuery: pump.model });
+            });
           } catch (e2) {
             App.setState({ pumpLoading: false, pumpError: 'Could not retrieve specs for “' + query + '”. Check the spelling of the model, or add it manually from the datasheet.' });
           }
@@ -1237,7 +1495,10 @@
       };
       if (s.clientSite.trim()) calcFields.site = s.clientSite.trim();
       var clients;
-      var existing = App.findClientByName(s.clients, name);
+      var existing = App.findClientByName(s.clients, name, s.clientSite.trim());
+      // A sole readings-only record without a site may acquire its first site.
+      var unlabelled = !existing && App.findClientByName(s.clients, name);
+      if (unlabelled && !unlabelled.site && !unlabelled.mode) existing = unlabelled;
       // Merge only when it's unambiguously the same site: never across two
       // different site labels, and never silently over an existing saved calc —
       // that snapshot may be the only record of the site's programme.
@@ -1252,13 +1513,23 @@
         App.setState({ clientSaveError: 'Could not write to this device’s storage — the client is NOT saved. Free up space (or leave private browsing) and save again.' });
         return;
       }
+      if (!s.calMl && !s.calSec) {
+        App._initialCalcSig = App.calcInputSig();
+        var savedCalc = existing ? clients.find(function (c) { return c.id === existing.id; }) : clients[0];
+        App._snap.calcBacking = { id: savedCalc.id, sig: App.clientCalcSig(savedCalc) };
+      }
       App.setState({ clients: clients, showClientForm: false, clientName: '', clientSite: '', clientSaveError: '' });
     },
     deleteClient: function (el) {
       var id = el.dataset.id;
+      var record = App.state.clients.find(function (r) { return r.id === id; });
+      if (!record || !window.confirm('Delete client “' + (record.name || id) + '” and all ' + (record.readings || []).length + ' reading sets? This cannot be undone.')) return;
       var clients = App.state.clients.filter(function (c) { return c.id !== id; });
-      App.persist(clients);
-      var patch = { clients: clients };
+      if (!App.persist(clients)) { App.setState({ storageError: 'Could not write to this device’s storage — the record is NOT deleted. Save a backup, free space and try again.' }); return; }
+      // A deleted client may be the only durable copy of the live calculation.
+      // Keep live inputs and conservatively restore update-reload protection.
+      App._initialCalcSig = null;
+      var patch = { storageError: App.protectedStorageWarning(), clients: clients };
       // clear any picker still pointing at the deleted client
       if (App.state.guideSaveClient === id) patch.guideSaveClient = '';
       if (App.state.jarSaveClient === id) patch.jarSaveClient = '';
@@ -1271,13 +1542,17 @@
       // readings-only client (saved from a playbook) — no calc setup to load
       if (!c.mode) { App.setState({ screen: 'clients' }); return; }
       var s = App.state;
-      var material = App.calcMaterial({ calcProductId: c.productId || '', form: c.form, density: c.density });
+      // Exact ID rename evidence: a22aada:data.js -> 4c0adde:data.js.
+      // Resolve at recall only: historical bytes and stored density stay untouched.
+      var aliases = { polyaluminiumchlor: 'pac', aluminiumchlorohyd: 'ach', ferricchloride40: 'ferric', aluminiumsulphatea: 'alum', sodiumaluminate: 'naalu' };
+      var productId = Object.prototype.hasOwnProperty.call(aliases, c.productId) ? aliases[c.productId] : (c.productId || '');
+      var material = App.calcMaterial({ calcProductId: productId, form: c.form, density: c.density });
       var materialNote = material.valid ? '' : 'Historical material form or density conflicts with the product, is missing or unknown. Original record retained; reconfirm material and liquid density.';
       var capacity = App.calcPumpCapacity({ pumpSource: c.pumpSource, pumpMax: c.pumpMax, selectedCalcPumpId: c.selectedCalcPumpId });
       var capacityOk = c.pumpCapacityVersion === 1 && isFinite(capacity) && capacity > 0;
       App.setState({
         screen: 'calc', productId: null,
-        calcProductId: c.productId || '', calcMode: c.mode || 'conc', form: material.form,
+        calcProductId: productId, calcMode: c.mode || 'conc', form: material.form,
         flow: c.flow != null ? c.flow : '', dose: c.dose != null ? c.dose : '',
         sludgeFlow: c.sludgeFlow != null ? c.sludgeFlow : '', ds: c.ds != null ? c.ds : '',
         doseKg: c.doseKg != null ? c.doseKg : '', sludgeDensity: c.sludgeDensity || '',
@@ -1352,11 +1627,15 @@
   };
 
   App.markBackup = function () {
+    if (this._restoreRecovery) return; // recovery export must not mutate original metadata
     var now = new Date().toISOString();
     try { localStorage.setItem('ctf_last_backup_v1', now); } catch (e) {}
     this.state.lastBackup = now;
   };
   App.doRestore = function (text) {
+    if (this._restoreRecovery) { this.setState({ restoreOk: false, restoreMsg: 'Recovery is pending. Save the original recovery backup off-device now; further restore is blocked. Do not close or reload.' }); return; }
+    var owner = this;
+    if (this._coordinated && !this._mutationActive) { this.mutateSaved(this.STORE_KEYS.map(function (k) { return k.key; }), function () { owner.doRestore(text); }); return; }
     var r = this.importData(text);
     if (!r.ok) { this.setState({ restoreMsg: r.error, restoreOk: false }); return; }
     var self = this, parts = [], nd = 0;
@@ -1368,6 +1647,14 @@
     self.requestPersistentStorage();
   };
 
+  // Wrap every synchronous list mutation; internal callers retain boolean write
+  // guards, but mounted browser actions acquire the cross-tab transaction first.
+  var mutationKeys = { confirmClient: ['ctf_clients_v1'], saveGuideReadings: ['ctf_clients_v1'], deleteClient: ['ctf_clients_v1'], confirmJarSave: ['ctf_jartests_v1', 'ctf_clients_v1'], deleteJarTest: ['ctf_jartests_v1'], confirmAddProduct: ['ctf_products_v1'], deleteProduct: ['ctf_products_v1'], confirmAddPump: ['ctf_pumps_v1'], removePump: ['ctf_pumps_v1'] };
+  Object.keys(mutationKeys).forEach(function (name) {
+    var original = H[name];
+    H[name] = function (el, event) { return App.mutateSaved(mutationKeys[name], function () { original(el, event); }); };
+  });
+  H.refreshSavedLists = function () { App.refreshSavedLists(); };
   App.H = H;
   window.FieldAssistant = App;
 

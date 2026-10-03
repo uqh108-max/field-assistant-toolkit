@@ -127,7 +127,10 @@
           progTxt = 'Dosing: ' + (r.prog.product || 'current product') + (r.prog.dose ? (' ' + r.prog.dose + ' ' + r.prog.unit) : '') + (r.prog.flow ? (' @ ' + r.prog.flow + ' ' + r.prog.flowUnit) : '');
           if (vals.length) progTxt += ' · ';
         }
-        return r.date + ' · ' + r.app + ' — ' + progTxt + vals.map(function (x) { return x.label + ' ' + x.v + (x.u ? ' ' + x.u : ''); }).join(', ');
+        var historyTime = App.historicalObservation(r);
+        var legacyDate = typeof r.date === 'string' ? r.date : '';
+        var observed = historyTime.observedAt ? historyTime.observedAt.replace('T', ' ') : ((historyTime.invalid ? 'Observation metadata unvalidated' : (historyTime.observedDate || (legacyDate ? 'Legacy recorded date: ' + legacyDate : 'Observation date unknown'))) + ' · observation time / timezone unknown');
+        return observed + (typeof r.savedAt === 'string' && r.savedAt ? ' · saved ' + r.savedAt : '') + ' · ' + r.app + ' — ' + progTxt + vals.map(function (x) { return x.label + ' ' + x.v + (x.u ? ' ' + x.u : ''); }).join(', ');
       });
       return {
         id: c.id, name: c.name, site: c.site || 'No site noted',
@@ -665,7 +668,7 @@
       '<div style="margin-top:9px;display:flex;flex-direction:column;gap:9px;">' + v.jarTestRows.map(function (t) {
         return '<div style="background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:13px 14px;">' +
           '<div style="display:flex;justify-content:space-between;align-items:flex-start;"><div style="flex:1;min-width:0;"><div style="font-size:14.5px;font-weight:700;">' + esc(t.product) + '</div><div style="font-size:12px;color:#6B776F;margin-top:1px;">' + esc(t.who) + ' · ' + esc(t.date) + '</div></div>' +
-          '<button data-act="deleteJarTest" data-id="' + esc(t.id) + '" style="border:none;background:none;cursor:pointer;padding:4px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C0574A" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button></div>' +
+          '<button data-act="deleteJarTest" data-id="' + esc(t.id) + '" aria-label="Delete jar test for ' + esc(t.who) + '" style="border:none;background:none;cursor:pointer;min-width:44px;min-height:44px;flex-shrink:0;padding:10px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C0574A" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button></div>' +
           '<div style="margin-top:9px;display:flex;flex-wrap:wrap;gap:6px;"><div style="background:#16211F;color:#4FE0B5;border-radius:8px;padding:5px 9px;font-size:12px;font-weight:700;font-family:\'IBM Plex Mono\';">' + esc(t.winner) + '</div><div style="background:#F0F6F3;border-radius:8px;padding:5px 9px;font-size:12px;font-weight:600;color:#17564C;">' + esc(t.setup) + '</div></div>' +
           (t.note ? '<div style="margin-top:8px;font-size:12.5px;color:#6B776F;line-height:1.45;">' + esc(t.note) + '</div>' : '') + '</div>';
       }).join('') + '</div>') : '';
@@ -712,7 +715,7 @@
     var s = App.state;
     var formHtml = s.showPumpForm ? pumpFormHtml(s) : '';
     var rowsHtml = v.pumpRows.map(function (p) {
-      var rm = p.removable ? '<button data-act="removePump" data-id="' + esc(p.id) + '" style="border:none;background:none;cursor:pointer;padding:2px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C0574A" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>' : '';
+      var rm = p.removable ? '<button data-act="removePump" data-id="' + esc(p.id) + '" aria-label="Delete pump ' + esc(p.model) + '" style="border:none;background:none;cursor:pointer;min-width:44px;min-height:44px;flex-shrink:0;padding:10px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C0574A" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>' : '';
       function box(label, val) { return '<div style="background:#F6F3EC;border-radius:9px;padding:8px 10px;"><div style="font-size:10px;color:#94A099;font-weight:700;text-transform:uppercase;">' + label + '</div><div style="font-size:14px;font-weight:700;font-family:\'IBM Plex Mono\';margin-top:1px;">' + esc(val) + '</div></div>'; }
       var aiNote = p.ai ? '<div style="margin-top:9px;background:#F3EFFA;border:1px solid #DDD1F0;border-radius:9px;padding:8px 11px;font-size:11.5px;color:#6A4CA0;line-height:1.45;">AI-retrieved from model knowledge — <b>verify against the official datasheet</b> before sizing a pump on these figures.</div>' : '';
       var srcNote = (p.source && !p.ai) ? '<div style="margin-top:8px;font-size:11px;color:#94A099;line-height:1.4;">Source: ' + esc(p.source) + '</div>' : '';
@@ -768,6 +771,9 @@
     var msg = s.backupMsg ? '<div style="margin-top:10px;font-size:12.5px;color:#17564C;line-height:1.45;font-weight:600;">' + esc(s.backupMsg) + '</div>' : '';
     var raw = s.backupText ? ('<textarea readonly data-key="backupText" style="margin-top:9px;width:100%;height:110px;border:1px solid #D8D2C4;border-radius:10px;padding:9px;font-family:\'IBM Plex Mono\';font-size:11px;background:#FBF9F4;color:#16211F;">' + esc(s.backupText) + '</textarea>' +
       '<button data-act="dismissBackupText" style="margin-top:6px;border:none;background:none;color:#6B776F;font-size:12px;font-weight:600;cursor:pointer;">Hide text</button>') : '';
+    // Immutable recovery is independent of ordinary export text and its Hide control.
+    var recoveryRaw = App._restoreRecovery ? '<label style="display:block;margin-top:12px;font-size:12.5px;font-weight:700;">Original session-only recovery backup (save off-device now)' +
+      '<textarea readonly data-recovery-text aria-label="Original session-only recovery backup" style="display:block;margin-top:6px;width:100%;height:110px;border:1px solid #E8C2B8;border-radius:10px;padding:9px;font-family:\'IBM Plex Mono\';font-size:11px;background:#FBF9F4;color:#16211F;">' + esc(App._restoreRecovery) + '</textarea></label>' : '';
     var restore = '';
     if (s.showRestore) {
       restore = '<div style="margin-top:12px;border-top:1px solid #EFEBE2;padding-top:12px;">' +
@@ -781,13 +787,13 @@
       (s.restoreOk ? 'background:#ECF7F3;border:1px solid #BFE3D6;color:#17564C;' : 'background:#FBEDEA;border:1px solid #E8C2B8;color:#8A3A2C;') + '">' + esc(s.restoreMsg) + '</div>' : '';
     return '<div style="margin-top:15px;background:#FFF;border:1px solid #E2DDD0;border-radius:15px;padding:14px 15px;">' +
       '<div style="font-size:15px;font-weight:700;">Backup &amp; restore</div>' +
-      '<div style="font-size:12.5px;color:#6B776F;margin-top:2px;line-height:1.45;">On this phone: ' + esc(counts) + '. ' + last + '.</div>' +
+      '<div style="font-size:12.5px;color:#6B776F;margin-top:2px;line-height:1.45;">' + (App._restoreRecovery ? 'In this open session (saved storage unverified): ' : 'On this phone: ') + esc(counts) + '. ' + last + '.</div>' +
       '<div style="display:flex;gap:9px;margin-top:11px;">' +
         '<button data-act="saveBackupFile" style="' + btn + 'background:#0C8577;color:#FFF;">Save backup file</button>' +
         '<button data-act="copyBackup" style="' + btn + '">Copy backup</button>' +
       '</div>' +
       (s.showRestore ? '' : '<button data-act="toggleRestore" style="margin-top:9px;width:100%;border:1px dashed #D8D2C4;cursor:pointer;background:#FBF9F4;color:#16211F;border-radius:11px;padding:10px;font-size:13px;font-weight:600;">Restore from a backup\u2026</button>') +
-      msg + raw + restore + rmsg + '</div>';
+      msg + raw + recoveryRaw + restore + rmsg + '</div>';
   }
 
   App.screens.clients = function (v) {
@@ -808,14 +814,14 @@
       var loadBtn = c.hasCalc ? '<button data-act="loadClient" data-id="' + esc(c.id) + '" style="margin-top:12px;width:100%;border:1px solid #0C8577;cursor:pointer;background:#FFF;color:#0C8577;border-radius:11px;padding:11px;font-size:14px;font-weight:700;">Load into calculator</button>' : '';
       return '<div style="background:#FFF;border:1px solid #E2DDD0;border-radius:15px;padding:14px 15px;">' +
         '<div style="display:flex;justify-content:space-between;align-items:flex-start;"><div style="flex:1;min-width:0;"><div style="font-size:16px;font-weight:700;">' + esc(c.name) + '</div><div style="font-size:12.5px;color:#6B776F;margin-top:1px;">' + esc(c.site) + '</div></div>' +
-        '<button data-act="deleteClient" data-id="' + esc(c.id) + '" style="border:none;background:none;cursor:pointer;padding:4px;"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#C0574A" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button></div>' +
+        '<button data-act="deleteClient" data-id="' + esc(c.id) + '" aria-label="Delete client ' + esc(c.name) + '" style="border:none;background:none;cursor:pointer;min-width:44px;min-height:44px;flex-shrink:0;padding:10px;"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#C0574A" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button></div>' +
         chipsLine + readingsLine + testLine + loadBtn + '</div>';
     }).join('') + '</div>') : '';
     var empty = v.noClients ? '<div style="margin-top:14px;background:#FBF9F4;border:1px dashed #D8D2C4;border-radius:14px;padding:18px;font-size:13px;color:#6B776F;line-height:1.5;text-align:center;">No clients yet. Go to the Dosing Calc, enter a site\'s flow and product, and tap <b style="color:#16211F">Save as client</b>.</div>' : '';
     return '<div style="padding:22px 18px 30px;animation:fadeUp .3s ease;">' +
-      '<div style="font-size:12px;letter-spacing:0.14em;text-transform:uppercase;color:#0C8577;font-weight:700;">Saved locally</div>' +
+      '<div style="font-size:12px;letter-spacing:0.14em;text-transform:uppercase;color:#0C8577;font-weight:700;">' + (App._restoreRecovery ? 'Recovery pending · saved storage unverified' : 'Saved locally') + '</div>' +
       '<div style="font-size:24px;font-weight:800;letter-spacing:-0.02em;margin:2px 0 4px;">Clients &amp; Sites</div>' +
-      '<div style="font-size:13px;color:#6B776F;line-height:1.5;">Each saved client stores its flow, product, dose and solution setup so you can recall it in one tap next visit. Stored on this device only.</div>' +
+      '<div style="font-size:13px;color:#6B776F;line-height:1.5;">Each saved client stores its flow, product, dose and solution setup so you can recall it in one tap next visit. Stored on this device only. Close all older installed copies or tabs and update them before editing; older versions do not participate in safe multi-tab coordination.</div>' +
       backupCardHtml(s) + addForm + listHtml + empty +
     '</div>';
   };
@@ -966,7 +972,7 @@
             : '<div style="margin-top:10px;background:#FBEBE7;border:1px solid #E9C4B9;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#8A3A24;line-height:1.5;">Filtered COD exceeds total COD — recheck one of the two readings.</div>';
         }
       }
-      var clientOpts = '<option value="">— save to existing client —</option>' + v.clients.map(function (c) { return '<option value="' + esc(c.id) + '"' + (c.id === s.guideSaveClient ? ' selected' : '') + '>' + esc(c.name) + '</option>'; }).join('');
+      var clientOpts = '<option value="">— save to existing client —</option>' + v.clients.map(function (c) { return '<option value="' + esc(c.id) + '"' + (c.id === s.guideSaveClient ? ' selected' : '') + '>' + esc(c.name + ' · ' + (c.site || c.id)) + '</option>'; }).join('');
       // target select + name go through handlers that clear guideSaved: the
       // '✓ Saved' banner must never survive an edit it doesn't cover. The button
       // disables while guideSaved — that (not value-comparison) is the
@@ -975,9 +981,10 @@
         '<select data-actchange="onGuideProgSelect" data-f="guideSaveClient" data-key="guideSaveClient" style="width:100%;background:#FFF;border:1px solid #D8D2C4;border-radius:10px;padding:11px 9px;font-size:13px;font-weight:600;color:#16211F;appearance:none;">' + clientOpts + '</select>' +
         '<input data-actinput="onGuideProgField" data-f="guideSaveName" data-key="guideSaveName" value="' + esc(s.guideSaveName) + '" placeholder="…or new client name" style="width:100%;background:#FBF9F4;border:1px solid #D8D2C4;border-radius:10px;padding:11px;font-size:13px;font-weight:500;">' +
         '</div>' +
+        '<div style="margin-top:10px;display:grid;gap:8px;"><label>Observation date (leave blank if unknown)<input type="date" data-actinput="onGuideProgField" data-f="guideObservedDate" data-key="guideObservedDate" value="' + esc(s.guideObservedDate) + '" style="display:block;width:100%;min-height:44px;font-size:16px;padding:8px;"></label><label>Observation time (24-hour; unknown if blank)<input type="time" data-actinput="onGuideProgField" data-f="guideObservedTime" data-key="guideObservedTime" value="' + esc(s.guideObservedTime) + '" style="display:block;width:100%;min-height:44px;font-size:16px;padding:8px;"></label><label>UTC offset at observation (explicit; e.g. +10:00)<input type="text" data-actinput="onGuideProgField" data-f="guideObservedOffset" data-key="guideObservedOffset" value="' + esc(s.guideObservedOffset) + '" placeholder="+10:00" style="display:block;width:100%;min-height:44px;font-size:16px;padding:8px;"></label><div style="font-size:12px;color:#6B776F;">Enter the offset where/when sampled, including daylight saving. Saving records the save time separately; it never supplies an unknown observation time.</div></div>' +
         '<button data-act="saveGuideReadings" ' + (s.guideSaved ? 'disabled ' : '') + 'style="margin-top:9px;width:100%;border:1px solid ' + (s.guideSaved ? '#C9D2CD' : '#0C8577') + ';cursor:pointer;background:#FFF;color:' + (s.guideSaved ? '#B4BBB4' : '#0C8577') + ';border-radius:11px;padding:12px;font-size:13.5px;font-weight:700;">Save readings to client</button>' +
         (s.guideSaveError ? '<div style="margin-top:8px;background:#FBEBE7;border:1px solid #E9C4B9;border-radius:10px;padding:9px 12px;font-size:12px;color:#8A3A24;line-height:1.45;font-weight:600;">' + esc(s.guideSaveError) + '</div>' : '') +
-        (s.guideSaved ? '<div style="margin-top:8px;background:#ECF7F3;border:1px solid #B8E0D3;border-radius:10px;padding:9px 12px;font-size:12px;color:#17564C;font-weight:600;">✓ Saved — dated ' + esc(new Date().toLocaleDateString('en-AU')) + ', see the client card.</div>' : '');
+        (s.guideSaved ? '<div style="margin-top:8px;background:#ECF7F3;border:1px solid #B8E0D3;border-radius:10px;padding:9px 12px;font-size:12px;color:#17564C;font-weight:600;">✓ Saved — observation details and separate save time are on the client card.</div>' : '');
       readingsHtml = '<div style="margin-top:12px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
         '<div style="font-size:12.5px;font-weight:700;color:#4B564F;">Site readings</div>' +
         '<div style="font-size:12px;color:#6B776F;line-height:1.5;margin:4px 0 11px;">From the plant visit. Save them against the client to build site history — repeat visits show what changed.</div>' +
@@ -1087,6 +1094,8 @@
 
   // ============================ MOUNT / RENDER ==============================
   App.mount = function () {
+    this._coordinated = true;
+    if (!this._seenRaw) this.load();
     this.$screen = document.getElementById('fa-screen');
     this.$nav = document.getElementById('fa-nav');
     var frame = document.getElementById('fa-frame');
@@ -1095,6 +1104,7 @@
     frame.addEventListener('click', function (e) {
       var el = e.target.closest('[data-act]');
       if (el && !el.disabled) { var fn = App.H[el.dataset.act]; if (fn) fn(el, e); }
+      if (self._pickerClickAway) { self._pickerClickAway = false; self.render(); }
     });
     frame.addEventListener('input', function (e) {
       var el = e.target;
@@ -1117,10 +1127,11 @@
       if (el.dataset.set != null) { self.setState_change(el.dataset.set, el.value); }
       else if (el.dataset.actchange) { var fn = App.H[el.dataset.actchange]; if (fn) fn(el, e); }
     });
-    // click-away: tapping outside an open combobox closes it (capture, pre-render)
+    // Close on pointerdown without replacing the target between pointerdown and
+    // click: the first outside click must still execute its intended action.
     frame.addEventListener('pointerdown', function (e) {
       if ((self.state.productPickerOpen || self.state.calcPumpPickerOpen || self.state.jarProductPickerOpen || self.state.guideProgPickerOpen) && !e.target.closest('[data-combo]')) {
-        self.state.productPickerOpen = false; self.state.calcPumpPickerOpen = false; self.state.jarProductPickerOpen = false; self.state.guideProgPickerOpen = false; self.render();
+        self.state.productPickerOpen = false; self.state.calcPumpPickerOpen = false; self.state.jarProductPickerOpen = false; self.state.guideProgPickerOpen = false; self._pickerClickAway = true;
       }
     }, true);
     // keep the mobile picker sheet fitted above the on-screen keyboard as it opens/closes
@@ -1181,6 +1192,12 @@
     else if (v.isGuide) html = this.screens.guide(v);
     else html = this.screens.home(v);
 
+    if (this.state.storageError) html = '<div role="alert" style="background:#FBEBE7;color:#8A3A24;padding:12px;">' + esc(this.state.storageError) + (this.state.storageConflict ? '<button data-act="refreshSavedLists" style="display:block;margin-top:8px;min-height:44px;padding:10px;">Refresh saved lists (keep entered form)</button>' : '') + '</div>' + html;
+    // Export results, Restore Cancel and Hide text cannot dismiss pending recovery.
+    // Sharing/copying/downloading is not a verified repair of saved storage.
+    if (this._restoreRecovery) html = '<div role="alert" data-recovery-warning style="position:sticky;top:0;z-index:20;background:#FBEBE7;border-bottom:2px solid #E8C2B8;color:#8A3A24;padding:12px;font-size:13px;line-height:1.45;">' +
+      '<strong>Recovery pending. Restore rollback could not be verified; storage may have changed.</strong> The original recovery backup exists only in this open session. <strong>Do not close or reload this app.</strong> Closing or crashing can lose this session-only recovery. Save the original recovery backup off-device now, and check that the file or text was preserved. Saved-data writes, further restore and refresh remain blocked. Download started, share completed or clipboard copied does not verify off-device preservation or repair saved storage.' +
+      (v.isClients ? '' : '<button data-act="goClients" style="display:block;margin-top:8px;min-height:44px;padding:10px;cursor:pointer;">Open original recovery backup</button>') + '</div>' + html;
     this.$screen.innerHTML = html;
     this.$nav.innerHTML = this.renderNav(v);
 
