@@ -28,8 +28,20 @@
   }
   // verified badge
   function vbadge(verified) {
+    if (verified && typeof verified === 'object') {
+      var record = verified;
+      if (record.custom || record.mine || App.state.customProducts.indexOf(record) >= 0 || App.state.foundPumps.indexOf(record) >= 0) verified = 'custom';
+      else if (record.ai || record.verified === 'ai') verified = 'ai';
+      else verified = { 'supplier-tds': 'datasheet', 'supplier-brochure': 'brochure', 'manufacturer-web-page': 'webpage', 'manufacturer-document': 'document', 'published-reference': 'reference', 'historical-tds': 'historical' }[record.sourceType] || 'unconfirmed';
+    }
     var map = {
-      datasheet: { t: 'TDS', bg: '#ECF7F3', fg: '#0C8577', title: 'From the supplier data sheet' },
+      datasheet: { t: 'TDS', bg: '#ECF7F3', fg: '#0C8577', title: 'Source document type only — not field verification or current operational approval' },
+      brochure: { t: 'BROCHURE', bg: '#FBF6EC', fg: '#8A5E17', title: 'Supplier brochure, not a dedicated grade TDS' },
+      webpage: { t: 'WEB PAGE', bg: '#FBF6EC', fg: '#8A5E17', title: 'Manufacturer web page, not a dedicated TDS' },
+      document: { t: 'DOCUMENT', bg: '#FBF6EC', fg: '#8A5E17', title: 'Manufacturer document; confirm exact operating duty' },
+      reference: { t: 'REFERENCE', bg: '#FBF6EC', fg: '#8A5E17', title: 'Published reference, not supplier formulation approval' },
+      historical: { t: 'HISTORICAL', bg: '#FBF6EC', fg: '#8A5E17', title: 'Historical document; current grade confirmation required' },
+      unconfirmed: { t: 'UNCONFIRMED', bg: '#FBF6EC', fg: '#8A5E17', title: 'Source type or current approval not confirmed' },
       typical: { t: 'TYPICAL', bg: '#FBF6EC', fg: '#8A5E17', title: 'Typical industry value — confirm on the TDS' },
       example: { t: 'EXAMPLE', bg: '#FBF9F4', fg: '#94A099', title: 'Editable example — not a datasheet value' },
       custom: { t: 'YOURS', bg: '#F3EFFA', fg: '#6A4CA0', title: 'Your custom entry' },
@@ -37,6 +49,27 @@
     };
     var m = map[verified]; if (!m) return '';
     return '<span title="' + esc(m.title) + '" style="display:inline-block;font-family:\'IBM Plex Mono\',monospace;font-size:9px;font-weight:600;letter-spacing:.04em;padding:2px 6px;border-radius:6px;background:' + m.bg + ';color:' + m.fg + ';vertical-align:middle;">' + m.t + '</span>';
+  }
+
+
+  function sourceInfo(p) {
+    if (!p || !p.id) return '';
+    var userEntry = p.custom || p.mine || App.state.customProducts.indexOf(p) >= 0 || App.state.foundPumps.indexOf(p) >= 0;
+    if (userEntry) return '<div role="note" style="margin-top:10px;padding:12px;border:1px dashed #D8D2C4;">User-declared values and supplied document references are not supplier-certified. Current operational approval: unconfirmed. Confirm model/grade and duty independently.</div>';
+    var pairs = (Array.isArray(p.capacityPairs) ? p.capacityPairs : []).filter(function (x) { return x && typeof x === 'object'; }).map(function (x) {
+      return x.model + ': ' + (x.injectionMaxLh != null ? 'injection max ' + x.injectionMaxLh + ' L/h, depends on motive flow / ratio' : x.flowLh + ' L/h at ' + x.pressureBar + ' bar, ' + x.frequencyHz + ' Hz' + (x.head ? ', ' + x.head + ' head' : ''));
+    }).join('; ');
+    return '<div role="note" style="margin-top:10px;padding:12px;border:1px dashed #D8D2C4;border-radius:10px;font-size:12px;line-height:1.5;color:#4B564F;">' +
+      '<b>Source scope, not dosing approval.</b> ' + esc(p.sourceCaution || (p.custom || p.mine ? 'User-declared values, not supplier-certified.' : 'Current source and field approval unconfirmed.')) +
+      '<div>Extraction confidence: ' + esc(p.extractionConfidence || 'not recorded') + '; current operational approval: ' + esc(p.operationalApproval || 'unconfirmed') + '.</div>' +
+      (p.sourceDocumentCode ? '<div>Document: ' + esc(p.sourceDocumentCode) + '</div>' : '<div>Dedicated document code: not recorded.</div>') +
+      (p.retrievedDate ? '<div>Source retrieved: ' + esc(p.retrievedDate) + '</div>' : '') +
+      (pairs ? '<div>Paired source ratings (not selected operating duty): ' + esc(pairs) + '</div>' : '') +
+      (p.motiveWaterFlow ? '<div>Motive-water throughput only: ' + esc(p.motiveWaterFlow) + '</div>' : '') +
+      (p.entryDoseUnit ? '<div>Workflow entry unit only: ' + esc(p.entryDoseUnit) + '. ' + esc(p.entryDoseNote) + '</div>' : '') +
+      (Array.isArray(p.doseWindows) ? p.doseWindows.filter(function (w) { return w && typeof w === 'object'; }).map(function (w) { return '<div>Source-window context: ' + esc(w.application) + '; purpose: ' + esc(w.purpose) + '; species/formulation: ' + esc(w.chemicalSpecies) + '; mass basis: ' + esc(w.massBasis) + '; source kind: ' + esc(w.sourceKind) + '; units: ' + esc(w.unit) + '; approval: ' + esc(w.approval) + '.</div>'; }).join('') : '') +
+      (p.doseSourceQuote ? '<div>Source dose quote (historical): ' + esc(p.doseSourceQuote) + '</div>' : '') +
+      (p.fieldEvidence ? '<div>Field evidence: ' + Object.keys(p.fieldEvidence).map(function (key) { return esc(key) + ': ' + esc(p.fieldEvidence[key]); }).join('; ') + '</div>' : '') + '</div>';
   }
 
   // one predicate for every product picker — search behaviour can't diverge
@@ -109,7 +142,7 @@
 
     var q = s.pumpQuery.trim().toLowerCase();
     var pumpRows = allPumps.filter(function (p) { return !q || (p.model + ' ' + p.brand + ' ' + p.type).toLowerCase().indexOf(q) >= 0; })
-      .map(function (p) { var o = Object.assign({}, p); o.removable = !!(p.ai || p.mine); return o; });
+      .map(function (p) { var o = Object.assign({}, p); o.mine = App.PUMPS.indexOf(p) < 0 && !p.ai; o.removable = !!(p.ai || o.mine); return o; });
 
     var clients = s.clients.map(function (c) {
       var fu = App.flowLabel(c.flowUnit);
@@ -271,19 +304,17 @@
   function doseWindowBanner(w, subject) {
     if (!w) return '';
     if (w.abstain) return '<div role="status" style="margin-top:10px;padding:12px;border:1px dashed #D8D2C4;border-radius:10px;"><b>Window not checked — no dosing recommendation.</b> ' + esc(w.reason) + ' Recorded range: ' + esc(w.raw) + '; unit: ' + esc(w.rawUnit) + '. ' + esc(w.note) + '</div>';
-    var noteLine = w.note ? '<div style="margin-top:6px;font-size:11px;opacity:.8;line-height:1.45;">Datasheet basis: ' + esc(w.note) + '</div>' : '';
+    var label = { 'supplier-tds': 'supplier operational range', 'published-reference': 'published reference window', 'site-test': 'site-validated test range' }[w.sourceKind] || 'unknown source window';
+    var noteLine = w.note ? '<div style="margin-top:6px;font-size:11px;opacity:.8;line-height:1.45;">Source window basis: ' + esc(w.note) + '</div>' : '';
     if (w.mismatch) {
       return '<div style="margin-top:10px;background:#FBF9F4;border:1px dashed #D8D2C4;border-radius:10px;padding:9px 12px;font-size:11.5px;color:#94A099;line-height:1.5;">' +
-        subject + ' doesn’t match <b>' + esc(w.name) + '</b>’s datasheet basis (' + esc(w.rawUnit || '') + ') — no window comparison shown.' + noteLine + '</div>';
+        subject + ' doesn’t match <b>' + esc(w.name) + '</b>’s source window basis (' + esc(w.rawUnit || '') + ') — no window comparison shown.' + noteLine + '</div>';
     }
     var ok = w.status === 'within';
-    var msg = ok ? 'sits <b>within</b> the datasheet window — a good baseline; bracket 50–150% to see if less still performs.'
-      : (w.status === 'above'
-        ? 'is <b>above</b> the datasheet window — possible overdose (wasted product, risk of re-stabilising solids). Retest downward.'
-        : 'is <b>below</b> the datasheet window — may be underdosing. Retest upward before changing anything.');
+    var msg = 'is <b>' + esc(w.status) + '</b> this ' + label + '. This is a reference comparison, not a proven optimum, safe dose or instruction to change dosing. Confirm by jar and plant testing.';
     var shown = App.fmt(w.val, 2) + ' ' + w.unit + (w.converted ? ' equivalent' : '');
     return '<div style="margin-top:10px;background:' + (ok ? '#ECF7F3' : '#FBF6EC') + ';border:1px solid ' + (ok ? '#B8E0D3' : '#EBD9BC') + ';border-radius:12px;padding:11px 13px;font-size:12.5px;line-height:1.55;color:' + (ok ? '#17564C' : '#6B5A38') + ';">' +
-      '<b>' + esc(w.name) + '</b> — typical window <b style="font-family:\'IBM Plex Mono\';">' + w.lo + '–' + w.hi + ' ' + w.unit + '</b> ' + vbadge(w.verified) + '. ' + subject + ' (' + esc(shown) + ') ' + msg + noteLine + '</div>';
+      '<b>' + esc(w.name) + '</b> — ' + label + ' <b style="font-family:\'IBM Plex Mono\';">' + w.lo + '–' + w.hi + ' ' + w.unit + '</b>. ' + subject + ' (' + esc(shown) + ') ' + msg + noteLine + '</div>';
   }
 
   // shared field/icon fragments
@@ -388,7 +419,7 @@
     var rowsHtml = v.productRows.map(function (p) {
       return '<button data-act="openProduct" data-id="' + esc(p.id) + '" style="text-align:left;cursor:pointer;background:#FFF;border:1px solid #E2DDD0;border-radius:16px;padding:14px 15px;display:flex;gap:13px;align-items:center;">' +
         '<div style="width:44px;height:44px;flex-shrink:0;border-radius:12px;background:' + esc(p.tint) + ';display:flex;align-items:center;justify-content:center;font-family:\'IBM Plex Mono\';font-weight:600;font-size:12px;color:' + esc(p.tintText) + ';">' + esc(p.tag) + '</div>' +
-        '<div style="flex:1;min-width:0;"><div style="font-size:15.5px;font-weight:700;">' + esc(p.name) + ' ' + vbadge(p.verified) + '</div>' +
+        '<div style="flex:1;min-width:0;"><div style="font-size:15.5px;font-weight:700;">' + esc(p.name) + ' ' + vbadge(p) + '</div>' +
         '<div style="font-size:12px;color:#6B776F;margin-top:1px;">' + esc(p.subtitle) + '</div></div>' +
         '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#B4BBB4" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></button>';
     }).join('');
@@ -424,6 +455,9 @@
           '<select data-actchange="onNpField" data-f="form" data-key="np-form" style="background:#202E2A;border:1px solid #35453F;border-radius:10px;padding:11px;font-size:13.5px;color:#FFF;appearance:none;">' + optionTags([{ v: 'Powder' }, { v: 'Liquid' }, { v: 'Emulsion' }], np.form, 'v', 'v') + '</select>' +
         '</div>' +
         fld('charge', np.charge, 'Charge (e.g. Cationic high)') +
+        '<label>Reference application <select data-actchange="onNpField" data-f="doseApplication" data-key="np-doseApplication">' + optionTags([{v:'unknown',label:'Unknown — no comparison'},{v:'potable',label:'Potable water'},{v:'sewage',label:'Sewage water treatment'},{v:'sludge',label:'Sludge treatment'},{v:'industrial',label:'Industrial water treatment'},{v:'mining',label:'Mining water treatment'}], np.doseApplication || 'unknown', 'v', 'label') + '</select></label>' +
+        '<label>Reference source kind <select data-actchange="onNpField" data-f="doseWindowSourceKind" data-key="np-doseWindowSourceKind">' + optionTags([{v:'unknown',label:'Unknown — no comparison'},{v:'site-test',label:'Site test reference'},{v:'published-reference',label:'Published reference'},{v:'supplier-tds',label:'Supplier operational range'}], np.doseWindowSourceKind || 'unknown', 'v', 'label') + '</select></label>' +
+        '<div style="font-size:11px;">These are your explicit source-window declarations, not supplier, grade or site approval. Application notes are not used to infer chemical provenance.</div>' +
         '<label>Range chemical basis <select data-actchange="onNpField" data-f="doseMassBasis" data-key="np-doseMassBasis">' + optionTags([{v:'unknown',label:'Unknown / active / reference formulation — no comparison'},{v:'as-supplied',label:'I confirm this range is mass of as-supplied product'}], np.doseMassBasis || 'unknown', 'v', 'label') + '</select></label>' +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;">' +
           fld('doseRange', np.doseRange, 'Dose range e.g. 1 – 10', 'background:#202E2A;border:1px solid #35453F;border-radius:10px;padding:11px;font-size:13.5px;color:#EFECE3;') +
@@ -457,13 +491,13 @@
         '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#0C8577" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg> Library</button>' +
       '<div style="display:flex;gap:14px;align-items:center;">' +
         '<div style="width:56px;height:56px;flex-shrink:0;border-radius:15px;background:' + esc(p.tint) + ';display:flex;align-items:center;justify-content:center;font-family:\'IBM Plex Mono\';font-weight:600;font-size:14px;color:' + esc(p.tintText) + ';">' + esc(p.tag) + '</div>' +
-        '<div><div style="font-size:22px;font-weight:800;letter-spacing:-0.02em;">' + esc(p.name) + ' ' + vbadge(p.verified) + '</div><div style="font-size:13px;color:#6B776F;">' + esc(p.brand) + '</div></div></div>' +
+        '<div><div style="font-size:22px;font-weight:800;letter-spacing:-0.02em;">' + esc(p.name) + ' ' + vbadge(p) + '</div><div style="font-size:13px;color:#6B776F;">' + esc(p.brand) + '</div></div></div>' +
       '<div style="margin-top:16px;display:grid;grid-template-columns:1fr 1fr;gap:9px;">' +
         statCard('Function', p.type) + statCard('Charge', p.charge) + statCard('Physical form', p.form) + statCard('Bulk density', p.densityText, true) +
       '</div>' +
       '<div style="margin-top:14px;background:#16211F;border-radius:16px;padding:16px 17px;color:#EFECE3;">' +
-        '<div style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#6E8A82;font-weight:700;">Typical dose window</div>' +
-        '<div style="display:flex;align-items:baseline;gap:8px;margin-top:6px;"><div style="font-family:\'IBM Plex Mono\';font-size:30px;font-weight:600;color:#4FE0B5;letter-spacing:-0.01em;">' + esc(p.doseRange) + '</div><div style="font-size:13px;color:#9FB0AA;">' + esc(p.doseUnit) + '</div></div>' +
+        '<div style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#6E8A82;font-weight:700;">Source-specific dose reference (not an optimum)</div>' +
+        '<div style="display:flex;align-items:baseline;gap:8px;margin-top:6px;"><div style="font-family:\'IBM Plex Mono\';font-size:30px;font-weight:600;color:#4FE0B5;letter-spacing:-0.01em;">' + esc(p.doseRange) + '</div><div style="font-size:13px;color:#9FB0AA;">' + esc(p.doseUnit || 'Source dose basis not stated') + '</div></div>' +
         '<div style="font-size:12.5px;color:#9FB0AA;margin-top:6px;line-height:1.5;">' + esc(p.doseNote) + '</div></div>' +
       '<div style="margin-top:14px;"><div style="font-size:13px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:#6B776F;margin-bottom:7px;">Application</div>' +
         '<div style="font-size:14px;line-height:1.55;color:#333E39;">' + esc(p.application) + '</div></div>' +
@@ -473,7 +507,7 @@
         '<div style="font-size:13.5px;line-height:1.55;color:#5C4A24;">' + esc(p.makeup) + '</div></div>' +
       '<div style="margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:9px;">' +
         statCard('Make-down strength', p.makedownText, true) + statCard('Ageing / maturation', p.ageing) +
-      '</div>' + srcLine +
+      '</div>' + srcLine + sourceInfo(p) +
       '<button data-act="useProductInCalc" style="margin-top:18px;width:100%;border:none;cursor:pointer;background:#0C8577;color:#FFF;border-radius:14px;padding:15px;font-size:15px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:8px;">' +
         '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FFF" stroke-width="2"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M8 6h8M8 10h8M8 14h3M15 14v4"/></svg>Use in dosing calculator</button>' +
       deleteBtn +
@@ -559,7 +593,7 @@
         }) + '</div>' +
       concBlock + sludgeBlock +
       (s.calcHandoffNote ? '<div role="alert">' + esc(s.calcHandoffNote) + '</div>' : '') +
-      doseWindowBanner(v.doseWin, v.doseWin && v.doseWin.mismatch ? 'The ' + (isConc ? 'mg/L' : 'kg/t DS') + ' entry' : 'The entered dose') +
+      doseWindowBanner(v.doseWin, v.doseWin && v.doseWin.mismatch ? 'The ' + (isConc ? 'mg/L' : 'kg/t DS') + ' entry' : 'The entered dose') + sourceInfo(v.allProducts.find(function (p) { return p.id === s.calcProductId; })) +
       '<div style="margin-top:14px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
         '<div style="font-size:12.5px;font-weight:700;color:#4B564F;margin-bottom:10px;">Feed preparation</div>' +
         '<label>Feed basis <select data-set="feedBasis" data-key="feedBasis"><option value="solution"' + (s.feedBasis !== 'neat' ? ' selected' : '') + '>Made-up solution (% w/v product)</option><option value="neat"' + (s.feedBasis === 'neat' ? ' selected' : '') + '>Neat liquid (use product density)</option></select></label>' +
@@ -648,13 +682,13 @@
     // A jar mg/L is only a full-scale dose when the product doses mg/L on flow.
     // Dry-tonne-basis products (g/t · kg/t DS) get an explanation, not a send
     // button — there is no conversion without the plant's solids balance.
-    var jarBasisMgL = s.jarVolumeBasis === 'initial' && (!s.jarProductId || App.doseBasisOf(v.jarProduct) === 'mgL');
+    var jarBasisMgL = s.jarVolumeBasis === 'initial' && (!s.jarProductId || App.entryDoseBasisOf(v.jarProduct) === 'mgL');
     var winnerHtml = v.hasWinner ? '<div style="margin-top:15px;background:#16211F;border-radius:16px;padding:16px 17px;color:#EFECE3;">' +
       '<div style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#6E8A82;font-weight:700;">Selected optimum — Jar ' + esc(v.winnerN) + '</div>' +
       '<div style="display:flex;align-items:baseline;gap:8px;margin-top:5px;"><div style="font-family:\'IBM Plex Mono\';font-size:30px;font-weight:600;color:#4FE0B5;">' + esc(v.winnerPpm) + '</div><div style="font-size:13px;color:#9FB0AA;">' + (jarBasisMgL ? 'mg/L nominal dose per initial raw sample' : 'mg/L in the jar') + '</div></div>' +
       (jarBasisMgL
         ? '<button data-act="useWinner" style="margin-top:12px;width:100%;border:none;cursor:pointer;background:#0C8577;color:#FFF;border-radius:12px;padding:13px;font-size:14.5px;font-weight:700;">Send this dose to the calculator →</button>'
-        : '<div style="margin-top:12px;background:#202E2A;border:1px solid #35453F;border-radius:10px;padding:10px 12px;font-size:12px;color:#DCE6E1;line-height:1.5;"><b>' + esc(v.jarProduct.name) + '</b> doses per tonne of dry solids at full scale (' + esc(v.jarProduct.doseUnit || '') + ') — a jar mg/L doesn’t convert to a plant dose without the solids balance. Use the sludge / mining playbook’s dry-solids tools instead.</div>') +
+        : '<div style="margin-top:12px;background:#202E2A;border:1px solid #35453F;border-radius:10px;padding:10px 12px;font-size:12px;color:#DCE6E1;line-height:1.5;"><b>' + esc(v.jarProduct.name) + '</b> has a dry-solids workflow entry basis (' + esc(v.jarProduct.entryDoseUnit || v.jarProduct.doseUnit || 'unknown') + '), not a confirmed supplier dose basis — a jar mg/L doesn’t convert to a plant dose without the solids balance. Use the sludge / mining playbook’s dry-solids tools instead.</div>') +
       '</div>' : '';
     var jarSaveForm = s.showJarSave ? ('<div style="margin-top:12px;background:#16211F;border-radius:16px;padding:16px;color:#EFECE3;">' +
       '<div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:#6E8A82;font-weight:700;margin-bottom:11px;">Save jar test</div>' +
@@ -704,7 +738,7 @@
       '<div style="margin-top:15px;display:flex;align-items:center;justify-content:space-between;"><div style="font-size:13px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:#6B776F;">Jars</div><div style="font-size:11px;color:#94A099;">tap ◎ to mark the winner</div></div>' +
       '<div style="margin-top:9px;display:flex;flex-direction:column;gap:10px;">' + jarRowsHtml + '</div>' +
       '<div style="margin-top:11px;display:flex;gap:9px;"><button data-act="addJar" style="flex:1;border:1px solid #D8D2C4;background:#FFF;cursor:pointer;border-radius:11px;padding:11px;font-size:13.5px;font-weight:700;color:#16211F;">+ Add jar</button><button data-act="removeJar" style="flex:1;border:1px solid #D8D2C4;background:#FFF;cursor:pointer;border-radius:11px;padding:11px;font-size:13.5px;font-weight:700;color:#6B776F;">– Remove last</button></div>' +
-      winnerHtml +
+      winnerHtml + sourceInfo(v.jarProduct) +
       '<button data-act="startJarSave" style="margin-top:14px;width:100%;border:1px solid #0C8577;cursor:pointer;background:#FFF;color:#0C8577;border-radius:14px;padding:14px;font-size:15px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:8px;"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#0C8577" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>Save this test</button>' +
       jarSaveForm + jarSaveErr + jarSaved + historyHtml +
       '<div style="margin-top:14px;background:#FBF9F4;border:1px dashed #D8D2C4;border-radius:12px;padding:13px 14px;font-size:12.5px;color:#6B776F;line-height:1.55;"><b style="color:#16211F;">Reading the test.</b> The best dose is usually the <i>lowest</i> one that gives clear water, fast-settling floc and stable pH — overdosing wastes product and can re-stabilise (re-suspend) the solids. Note floc as pinpoint / small / medium / large.</div>' +
@@ -718,17 +752,17 @@
       var rm = p.removable ? '<button data-act="removePump" data-id="' + esc(p.id) + '" aria-label="Delete pump ' + esc(p.model) + '" style="border:none;background:none;cursor:pointer;min-width:44px;min-height:44px;flex-shrink:0;padding:10px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C0574A" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>' : '';
       function box(label, val) { return '<div style="background:#F6F3EC;border-radius:9px;padding:8px 10px;"><div style="font-size:10px;color:#94A099;font-weight:700;text-transform:uppercase;">' + label + '</div><div style="font-size:14px;font-weight:700;font-family:\'IBM Plex Mono\';margin-top:1px;">' + esc(val) + '</div></div>'; }
       var aiNote = p.ai ? '<div style="margin-top:9px;background:#F3EFFA;border:1px solid #DDD1F0;border-radius:9px;padding:8px 11px;font-size:11.5px;color:#6A4CA0;line-height:1.45;">AI-retrieved from model knowledge — <b>verify against the official datasheet</b> before sizing a pump on these figures.</div>' : '';
-      var srcNote = (p.source && !p.ai) ? '<div style="margin-top:8px;font-size:11px;color:#94A099;line-height:1.4;">Source: ' + esc(p.source) + '</div>' : '';
+      var srcNote = (p.source && !p.ai) ? '<div style="margin-top:8px;font-size:11px;color:#94A099;line-height:1.4;">Source: ' + esc(p.source) + '</div>' + sourceInfo(p) : sourceInfo(p);
       return '<div style="background:#FFF;border:1px solid #E2DDD0;border-radius:15px;padding:14px 15px;">' +
-        '<div style="display:flex;justify-content:space-between;align-items:flex-start;"><div><div style="font-size:15.5px;font-weight:700;">' + esc(p.model) + ' ' + vbadge(p.verified) + '</div><div style="font-size:12px;color:#6B776F;">' + esc(p.brand) + ' · ' + esc(p.type) + '</div></div>' +
+        '<div style="display:flex;justify-content:space-between;align-items:flex-start;"><div><div style="font-size:15.5px;font-weight:700;">' + esc(p.model) + ' ' + vbadge(p) + '</div><div style="font-size:12px;color:#6B776F;">' + esc(p.brand) + ' · ' + esc(p.type) + '</div></div>' +
         '<div style="display:flex;align-items:center;gap:8px;"><div style="background:' + esc(p.tint) + ';color:' + esc(p.tintText) + ';border-radius:8px;padding:4px 9px;font-size:11px;font-weight:700;font-family:\'IBM Plex Mono\';">' + esc(p.tag) + '</div>' + rm + '</div></div>' +
         '<div style="margin-top:12px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">' + box('Max flow', p.maxFlow) + box('Max press', p.maxPress) +
           '<div style="background:#F6F3EC;border-radius:9px;padding:8px 10px;"><div style="font-size:10px;color:#94A099;font-weight:700;text-transform:uppercase;">Control</div><div style="font-size:13px;font-weight:700;margin-top:1px;">' + esc(p.control) + '</div></div></div>' +
         (p.note ? '<div style="margin-top:9px;font-size:12.5px;color:#6B776F;line-height:1.5;">' + esc(p.note) + '</div>' : '') + srcNote + aiNote + '</div>';
     }).join('');
     var noMatch = v.noPumpMatch ? ('<div style="margin-top:8px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:16px;text-align:center;"><div style="font-size:13px;color:#6B776F;line-height:1.5;">Not in your local repository yet.</div>' +
-      '<button data-act="lookupPump" style="margin-top:12px;width:100%;border:none;cursor:pointer;background:#16211F;color:#EFECE3;border-radius:12px;padding:13px;font-size:14px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:8px;"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#4FE0B5" stroke-width="2"><path d="M12 2a7 7 0 0 0-4 12.7V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.3A7 7 0 0 0 12 2z"/><path d="M9 21h6"/></svg>Look up “' + esc(s.pumpQuery) + '” specs</button>' +
-      '<div style="margin-top:8px;font-size:11.5px;color:#94A099;line-height:1.4;">Pulls typical specs for this model and saves it to your device (needs a connection); otherwise opens the manual form pre-filled.</div></div>') : '';
+      '<button data-act="lookupPump" style="margin-top:12px;width:100%;border:none;cursor:pointer;background:#16211F;color:#EFECE3;border-radius:12px;padding:13px;font-size:14px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:8px;"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#4FE0B5" stroke-width="2"><path d="M12 2a7 7 0 0 0-4 12.7V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.3A7 7 0 0 0 12 2z"/><path d="M9 21h6"/></svg>Enter manually “' + esc(s.pumpQuery) + '”</button>' +
+      '<div style="margin-top:8px;font-size:11.5px;color:#94A099;line-height:1.4;">Automatic source lookup is unavailable. Opens a manual form; values remain user-declared, not supplier-certified.</div></div>') : '';
     var loadingHtml = s.pumpLoading ? '<div style="margin-top:8px;background:#16211F;border-radius:12px;padding:15px;text-align:center;color:#9FB0AA;font-size:13px;display:flex;align-items:center;justify-content:center;gap:10px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#4FE0B5" stroke-width="2" style="animation:spin 0.9s linear infinite;"><path d="M21 12a9 9 0 1 1-6.2-8.5"/></svg>Looking up “' + esc(s.pumpQuery) + '”…</div>' : '';
     var errHtml = s.pumpError ? '<div style="margin-top:8px;background:#FBEBE7;border:1px solid #E9C4B9;border-radius:12px;padding:13px 14px;font-size:12.5px;color:#8A3A24;line-height:1.5;">' + esc(s.pumpError) + '</div>' : '';
     return '<div style="padding:22px 18px 30px;animation:fadeUp .3s ease;">' +
@@ -739,7 +773,7 @@
       '<button data-act="startAddPump" style="margin-top:12px;width:100%;border:1px dashed #C6BFAF;background:#FBF9F4;cursor:pointer;border-radius:12px;padding:12px;font-size:13.5px;font-weight:700;color:#4B564F;display:flex;align-items:center;justify-content:center;gap:7px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0C8577" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>Add a pump manually</button>' +
       formHtml +
       '<div style="margin-top:13px;display:flex;flex-direction:column;gap:10px;">' + rowsHtml + '</div>' + noMatch + loadingHtml + errHtml +
-      '<div style="margin-top:14px;background:#FBF9F4;border:1px dashed #D8D2C4;border-radius:12px;padding:13px 14px;font-size:12.5px;color:#6B776F;line-height:1.55;"><b style="color:#16211F;">Building your library.</b> Search any model — if it\'s not stored, add it manually from the datasheet. Always confirm max flow and back-pressure against the maker\'s datasheet; those drive the calculator\'s % stroke.</div>' +
+      '<div style="margin-top:14px;background:#FBF9F4;border:1px dashed #D8D2C4;border-radius:12px;padding:13px 14px;font-size:12.5px;color:#6B776F;line-height:1.55;"><b style="color:#16211F;">Building your library.</b> Search any model — if it\'s not stored, add it manually from the datasheet. Confirm exact model, frequency, injection medium, back-pressure and current supplier instructions. Family maxima are not simultaneous; no generic stroke advice for proportional water-driven dosers.</div>' +
     '</div>';
   };
   function pumpFormHtml(s) {
@@ -883,9 +917,9 @@
     if (!g) return App.screens.guide(v);
 
     var outputsHtml = g.outputs ? ('<div style="margin-top:14px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
-      '<div style="font-size:12.5px;font-weight:700;color:#4B564F;margin-bottom:8px;">What this playbook predicts</div>' +
+      '<div style="font-size:12.5px;font-weight:700;color:#4B564F;margin-bottom:8px;">Determine / confirm by jar and plant testing</div>' +
       '<ul style="margin:0;padding-left:18px;display:flex;flex-direction:column;gap:5px;">' + g.outputs.map(function (t) { return '<li style="font-size:13px;line-height:1.5;color:#333E39;">' + esc(t) + '</li>'; }).join('') + '</ul>' +
-      '<div style="margin-top:9px;font-size:11.5px;color:#94A099;line-height:1.45;">…then the recommendation is checked with a compact jar test — the prediction never ships on its own.</div></div>') : '';
+      '<div style="margin-top:9px;font-size:11.5px;color:#94A099;line-height:1.45;">These are testing objectives, not computed predictions. No starting dose, alkalinity balance or post-dose pH is calculated by this panel.</div></div>') : '';
 
     var measureHtml = '';
     if (g.measure && g.measure.length) {
@@ -1001,11 +1035,11 @@
         optionTags(App.DOSE_UNITS, s.guideProgDoseUnit, 'v', 'label') + '</select>';
       var flowSel = '<select data-actchange="onGuideProgSelect" data-f="guideProgFlowUnit" data-key="guideProgFlowUnit" style="border:none;border-left:1px solid #E2DDD0;background:#F6F3EC;padding:0 26px 0 10px;font-size:12px;font-weight:700;color:#4B564F;appearance:none;cursor:pointer;background-image:' + DOWNARROW + ';background-repeat:no-repeat;background-position:right 9px center;">' +
         optionTags(App.FLOW_UNITS, s.guideProgFlowUnit, 'v', 'label') + '</select>';
-      var winHtml = '';
+      var winHtml = sourceInfo(prog.product);
       if (prog.win) {
-        winHtml = doseWindowBanner(prog.win, 'Their rate');
+        winHtml += doseWindowBanner(prog.win, 'Their rate');
       } else if (prog.unitMismatch) {
-        winHtml = doseWindowBanner({
+        winHtml += doseWindowBanner({
           mismatch: true, name: (prog.product || {}).name || '',
           rawUnit: (prog.product || {}).doseUnit || '', note: (prog.product || {}).doseNote || ''
         }, 'The entered dose unit');
@@ -1040,7 +1074,7 @@
         '</div>' + winHtml + consHtml + progBtns + '</div>';
     }
 
-    var tdiHtml = '';
+    var tdiHtml = '<div role="note" style="margin-top:12px;padding:12px;border:1px dashed #D8D2C4;">No validated TDI model is available for this market. Use descriptive measurements and site testing; potable bands are not reused.</div>';
     if (g.tdi) {
       var tdi = App.computeTdi(g.id);
       var flagRows = tdi.rows.map(function (r) {
@@ -1049,8 +1083,8 @@
           '<div style="font-size:11.5px;color:' + r.fg + ';opacity:.85;line-height:1.45;margin-top:2px;">' + esc(r.note) + '</div></div>';
       }).join('');
       tdiHtml = '<div style="margin-top:12px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
-        '<div style="display:flex;align-items:center;gap:7px;"><div style="font-size:12.5px;font-weight:700;color:#4B564F;">Demand snapshot (TDI)</div>' + vbadge('example') + '</div>' +
-        '<div style="font-size:12px;color:#6B776F;line-height:1.5;margin-top:4px;">Reads the site readings above and flags where the chemical demand is coming from. Band thresholds are illustrative demo values; calibrate against your own jar-test history before relying on them.</div>' +
+        '<div style="display:flex;align-items:center;gap:7px;"><div style="font-size:12.5px;font-weight:700;color:#4B564F;">Descriptive measurement snapshot (TDI)</div>' + vbadge('example') + '</div>' +
+        '<div style="font-size:12px;color:#6B776F;line-height:1.5;margin-top:4px;">Illustrative measurement bands only — not chemical demand, required dose or product selection. No validated predictive model is available here.</div>' +
         (tdi.invalid ? '<div role="alert">Invalid reading: use a plain non-negative decimal with a decimal point, no commas or grouping. Invalid readings are not banded.</div>' : '') +
         (tdi.hasAny ? '<div style="margin-top:11px;display:flex;flex-direction:column;gap:7px;">' + flagRows + '</div>' : '<div style="margin-top:11px;background:#FBF9F4;border:1px dashed #D8D2C4;border-radius:10px;padding:11px 12px;font-size:12px;color:#94A099;text-align:center;">Enter turbidity, UV254, alkalinity or pH above to see the flags.</div>') +
         (tdi.summary ? '<div style="margin-top:9px;background:#16211F;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#DCE6E1;line-height:1.5;">' + esc(tdi.summary) + '</div>' : '') + '</div>';

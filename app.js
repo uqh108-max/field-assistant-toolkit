@@ -481,7 +481,7 @@
     // flow do not establish an injection capacity at the operating duty.
     UNCONFIRMED_PUMPS: 'pk18roytronics pk19seriesaafa pk20seriesaa9m pk21seriesbfam pk22seriescfam pk23seriespfam pk24seriese7ex pk25seriesgmac pk26seriesgmod pk27roytronice pk28priusprius pk34memdoslasi pk35magdoslbsi pk48extronicty pk49betabbt5b0 pk57pulsatrons pk75qdoshflo pkgdme_s pkgdme_l pkgdmx pkprdelta pkprvario pk32d9wlwaterp pk60teknaserie pk61teknaakl pk62teknaapg pk64tekbaserie'.split(' '),
     pumpCapacityOf: function (p) {
-      return !p || p.ai || /^ai$/i.test(p.verified || '') || this.UNCONFIRMED_PUMPS.indexOf(p.id) >= 0 ? NaN : this.parsePumpFlow(p.maxFlow);
+      return !p || p.capacityLh === null || p.familyEnvelope || p.id === 'pk33d9wl5' || p.ai || /^ai$/i.test(p.verified || '') || this.UNCONFIRMED_PUMPS.indexOf(p.id) >= 0 ? NaN : this.parsePumpFlow(p.maxFlow);
     },
     calcPumpCapacity: function (s) {
       if (s.pumpSource === 'manual') return this.parseNum(s.pumpMax);
@@ -675,6 +675,7 @@
     // Potable demand snapshot. The band thresholds are ILLUSTRATIVE demo values
     // (rendered with an EXAMPLE badge) — calibrate against site jar-test history.
     computeTdi: function (pbId) {
+      if (pbId && pbId !== 'potable') return { rows: [], summary: 'No validated TDI model is available for this market; use descriptive measurements and site testing.', hasAny: false, invalid: false, supported: false };
       var pre = (pbId || 'potable') + ':';
       var r = this.state.guideReadings;
       var t = this.parseNum(r[pre + 'turb']), u = this.parseNum(r[pre + 'uv']), a = this.parseNum(r[pre + 'alk']), p = this.parseNum(r[pre + 'ph']);
@@ -688,15 +689,15 @@
       var rows = [];
       var nom = band(u, 0.05, 0.15);
       if (nom != null) rows.push({ label: 'Organics / NOM (UV254)', lvl: LEV[nom], fg: COL[nom].fg, bg: COL[nom].bg, note: [
-        'Little dissolved-organic demand indicated.',
-        'NOM present — expect meaningful coagulant demand for organics.',
-        'Organics likely drive the dose — check colour/DOC; a higher-basicity coagulant may suit.'
+        'Low UV254 observation only — required dose is not inferred.',
+        'UV254 observation in the middle example band; confirm organic-removal objectives by testing.',
+        'High UV254 observation; check colour/DOC and jar-test treatment objectives. No coagulant family or dose is inferred.'
       ][nom] });
       var part = band(t, 10, 50);
       if (part != null) rows.push({ label: 'Particle load (turbidity)', lvl: LEV[part], fg: COL[part].fg, bg: COL[part].bg, note: [
         'Low particle loading.',
         'Moderate particle loading.',
-        'High solids — sweep flocculation likely; judge settled AND filtered turbidity.'
+        'High turbidity example band; judge settled AND filtered turbidity by testing. No mechanism or required dose is inferred.'
       ][part] });
       if (isFinite(a)) {
         // Illustrative concentration bands, not a calculated buffering balance.
@@ -706,16 +707,14 @@
           : 'Illustrative alkalinity band only — this does not establish buffering adequacy for the selected dose. Chemical species and dose basis are not verified, so no alkalinity demand is calculated.' });
       }
       if (isFinite(p)) {
-        var pb = (p >= 6.5 && p <= 8) ? 0 : 1;
-        rows.push({ label: 'Raw pH', lvl: this.fmt(p, 2), fg: COL[pb].fg, bg: COL[pb].bg, note: p < 6.5
-          ? 'Already low — watch total acid demand from the coagulant.'
-          : (p > 8 ? 'High — check the post-dose pH target; coagulant choice and dose both move it.' : 'In the usual coagulation window.') });
+        var pb = 1; // Raw pH is an observation, not an optimum/green chemistry verdict.
+        rows.push({ label: 'Raw pH', lvl: this.fmt(p, 2), fg: COL[pb].fg, bg: COL[pb].bg, note: 'Raw-water observation only. Determine treatment-objective post-dose pH by jar and plant testing; no universal coagulation optimum is inferred.' });
       }
       var demand = Math.max(nom == null ? -1 : nom, part == null ? -1 : part);
-      var summary = demand < 0 ? '' : 'Overall chemical demand: ' + LEV[demand].toLowerCase() + ' (example banding). Confirm with a compact multi-point jar test before recommending.';
+      var summary = rows.length ? 'Descriptive example bands, not a required chemical dose or coagulant-family prediction. Low turbidity does not imply low required dose. No alkalinity balance or post-dose pH is calculated; confirm by jar and plant testing.' : '';
       var self = this;
       var invalid = ['turb', 'uv', 'alk', 'ph'].some(function (key) { var raw = r[pre + key]; return String(raw == null ? '' : raw).trim() !== '' && !isFinite(self.parseNum(raw)); });
-      return { rows: rows, summary: summary, hasAny: rows.length > 0, invalid: invalid };
+      return { rows: rows, summary: summary, hasAny: rows.length > 0, invalid: invalid, supported: true };
     },
     // Mining bench dose: sample mass + %solids + stock added → g/t dry solids.
     computeBench: function () {
@@ -732,7 +731,12 @@
       };
     },
 
-    // Which basis a product's datasheet dose is quoted in.
+    // Legacy workflow entry units are separate from supplier-window units.
+    // A workflow choice never approves a source basis or reference comparison.
+    entryDoseBasisOf: function (p) {
+      return this.doseBasisOf({ doseUnit: p && (p.entryDoseUnit || p.doseUnit) });
+    },
+    // Which basis a product's source dose is quoted in.
     // 'mgL' = mg/L on flow · 'kgt' = kg/t dry solids · 'gt' = g/t dry solids/substrate.
     // Returns null when the phrasing is unrecognisable — the callers then abstain
     // from any window comparison rather than guessing a basis (a wrong guess here
@@ -749,21 +753,29 @@
     // already be in the product's own dose basis. Abstains rather than guesses:
     // no comparison for comma-grouped numbers, capped/multi-context ranges
     // ("0.25-0.5; NSF max 1.0"), or anything that isn't exactly "lo – hi".
-    doseAbstention: function (p) {
+    doseAbstention: function (p, application) {
       if (!p) return null;
       var reason = '';
       if (/[a-z%/]/i.test(String(p.doseRange || ''))) reason = 'Range includes unit text or multiple contexts; confirm matching units and basis before comparison.';
       else if (p.doseMassBasis !== 'as-supplied') reason = 'Chemical dose basis is not confirmed as as-supplied product (may be active ingredient, dry equivalent or reference formulation).';
+      else if (!/^(potable|sewage|sludge|industrial|mining)$/.test(p.doseApplication || '') || p.doseApplication !== application) reason = 'Source-window application is unknown or does not match this treatment context; no cross-application comparison.';
+      else if (typeof p.doseWindowSourceKind !== 'string' || !/^(supplier-tds|published-reference|site-test)$/.test(p.doseWindowSourceKind)) reason = 'Source-window provenance is unknown; confirm a field-specific source kind before comparison.';
       else if (!this.doseBasisOf(p)) reason = 'Dose units are unknown; mg/L and dry-tonne units require a solids balance, not a direct comparison.';
       else if (!/^(?:\d+(?:\.\d{1,2})?|0\.\d+|\.\d+)\s*[-–—]\s*(?:\d+(?:\.\d{1,2})?|0\.\d+|\.\d+)$/.test(String(p.doseRange || '').trim())) reason = 'No unambiguous single dose window is available.';
       if (!reason) {
         var bounds = String(p.doseRange).split(/[-–—]/);
         if (!(this.parseNum(bounds[0]) <= this.parseNum(bounds[1])) || !(this.parseNum(bounds[1]) > 0)) reason = 'Invalid dose window: bounds must be positive and in ascending order.';
+        // Flat legacy tuples are supported only when explicit. If structured
+        // metadata exists it must describe the same single window, not override it.
+        if (!reason && Object.prototype.hasOwnProperty.call(p, 'doseWindows')) {
+          var windows = p.doseWindows, w = Array.isArray(windows) && windows.length === 1 ? windows[0] : null;
+          if (!w || typeof w !== 'object' || w.application !== p.doseApplication || w.massBasis !== p.doseMassBasis || w.sourceKind !== p.doseWindowSourceKind || w.unit !== p.doseUnit || !Array.isArray(w.range) || w.range.length !== 2 || typeof w.range[0] !== 'number' || typeof w.range[1] !== 'number' || w.range[0] !== this.parseNum(bounds[0]) || w.range[1] !== this.parseNum(bounds[1]) || (w.rawRange !== undefined && String(w.rawRange).replace(/\s/g, '') !== String(p.doseRange).replace(/\s/g, '')) || (w.approval !== undefined && w.approval !== 'unconfirmed')) reason = 'Source-window metadata is unknown or conflicting; reconcile application, range, units, mass basis and source provenance before comparison. Source metadata is not operating approval.';
+        }
       }
       return reason ? { abstain: true, name: p.name, raw: p.doseRange || '—', rawUnit: p.doseUnit || 'Unknown', note: p.doseNote || '', reason: reason } : null;
     },
-    doseWindowFor: function (p, val) {
-      if (this.doseAbstention(p)) return null;
+    doseWindowFor: function (p, val, application) {
+      if (this.doseAbstention(p, application)) return null;
       if (!p || !p.doseRange || !isFinite(val) || val <= 0) return null;
       var basis = this.doseBasisOf(p);
       if (!basis) return null; // unrecognisable basis — no comparison
@@ -780,7 +792,7 @@
       if (!isFinite(lo) || !isFinite(hi) || hi <= 0 || lo > hi) return null;
       var epsilon = 1e-12 * Math.max(1, Math.abs(val), Math.abs(lo), Math.abs(hi));
       var status = val < lo - epsilon ? 'below' : (val > hi + epsilon ? 'above' : 'within');
-      return { lo: lo, hi: hi, val: val, status: status, unit: this.doseUnitLabel(basis), raw: p.doseRange, name: p.name, verified: p.verified, note: p.doseNote || '' };
+      return { lo: lo, hi: hi, val: val, status: status, unit: this.doseUnitLabel(basis), raw: p.doseRange, name: p.name, sourceKind: p.doseWindowSourceKind || 'unknown', note: p.doseNote || '' };
     },
     // Calc screen: compare the entered dose when the product's dose basis is
     // reachable from the calc mode (mg/L ↔ conc; kg/t or g/t ↔ sludge). A basis
@@ -790,19 +802,20 @@
       var s = this.state;
       var p = this.allProducts().find(function (x) { return x.id === s.calcProductId; });
       if (!p) return null;
-      var abstain = this.doseAbstention(p);
+      var application = s.calcMode === 'sludge' ? 'sludge' : 'unknown';
+      var abstain = this.doseAbstention(p, application);
       if (abstain) return abstain;
       var basis = this.doseBasisOf(p);
       if (!basis) return null; // unrecognisable basis — abstain
       var mismatch = { mismatch: true, name: p.name, rawUnit: p.doseUnit || '', note: p.doseNote || '' };
       if (s.calcMode === 'conc') {
         if (basis !== 'mgL') return mismatch;
-        return this.doseWindowFor(p, this.parseNum(s.dose));
+        return this.doseWindowFor(p, this.parseNum(s.dose), application);
       }
       var v = this.parseNum(s.doseKg); // sludge mode doses in kg/t DS
-      if (basis === 'kgt') return this.doseWindowFor(p, v);
+      if (basis === 'kgt') return this.doseWindowFor(p, v, application);
       if (basis === 'gt') {
-        var w = this.doseWindowFor(p, v * 1000);
+        var w = this.doseWindowFor(p, v * 1000, application);
         if (w) w.converted = true;
         return w;
       }
@@ -816,7 +829,7 @@
       if (!(d > 0) || s.guideProgMassBasis !== 'as-supplied') d = NaN;
       var basis = s.guideProgDoseUnit; // mgL | kgt | gt
       var win = s.guideProgMassBasis !== 'as-supplied' ? { abstain: true, name: p ? p.name : 'Programme', raw: s.guideProgDose, rawUnit: this.doseUnitLabel(basis), reason: 'Programme dose is active ingredient or unknown basis. Confirm as-supplied product mass; no active-fraction conversion is assumed.' } : null, unitMismatch = false;
-      if (p && isFinite(d) && this.doseAbstention(p)) { win = this.doseAbstention(p); }
+      if (p && isFinite(d) && this.doseAbstention(p, s.guideId)) { win = this.doseAbstention(p, s.guideId); }
       else if (p && isFinite(d)) {
         var pBasis = this.doseBasisOf(p);
         var val = NaN;
@@ -824,7 +837,7 @@
         else if (basis === 'kgt' && pBasis === 'gt') val = d * 1000;
         else if (basis === 'gt' && pBasis === 'kgt') val = d / 1000;
         if (isFinite(val)) {
-          win = this.doseWindowFor(p, val);
+          win = this.doseWindowFor(p, val, s.guideId);
           if (win) win.converted = basis !== pBasis;
         } else unitMismatch = true;
       }
@@ -1130,7 +1143,7 @@
       var d = App.parseNum(s.guideProgDose);
       if (!(d > 0) || s.guideProgMassBasis !== 'as-supplied' || s.guideProgDoseUnit !== 'mgL') { App.setState({ bracketNote: 'Retest blocked: a dry-solids dose cannot become mg/L without a solids balance.' }); return; }
       var p = App.allProducts().find(function (x) { return x.id === s.guideProgProductId; }) || null;
-      if (p && App.doseBasisOf(p) !== 'mgL') { App.setState({ bracketNote: 'Retest blocked: product dose basis does not match mg/L.' }); return; }
+      if (p && App.entryDoseBasisOf(p) !== 'mgL') { App.setState({ bracketNote: 'Retest blocked: product dose basis does not match mg/L.' }); return; }
       var prev = { jarCurrentDose: s.jarCurrentDose, jarProductId: s.jarProductId, jars: s.jars };
       // Bracketing confirms before replacing results; attribution commits only
       // when a new jar array was actually produced.
@@ -1270,6 +1283,8 @@
         brand: np.brand.trim() || 'Custom entry', type: type, charge: np.charge.trim() || '—', form: np.form,
         densityText: np.density ? ('~' + np.density + ' kg/L') : '—',
         doseRange: np.doseRange.trim() || '—', doseUnit: np.doseUnit, doseMassBasis: np.doseMassBasis || 'unknown',
+        doseApplication: /^(potable|sewage|sludge|industrial|mining)$/.test(np.doseApplication || '') ? np.doseApplication : 'unknown',
+        doseWindowSourceKind: /^(supplier-tds|published-reference|site-test)$/.test(np.doseWindowSourceKind || '') ? np.doseWindowSourceKind : 'unknown',
         doseNote: 'Your custom entry — verify against the supplier data sheet.',
         application: np.application.trim() || '—', makeup: np.makeup.trim() || '—',
         makedownText: np.makedown.trim() || '—', ageing: np.ageing.trim() || '—',
@@ -1368,7 +1383,7 @@
       // dry-tonne-basis product there is no conversion without the solids
       // balance — the winner card explains this instead of offering the button.
       var jp = App.allProducts().find(function (x) { return x.id === s.jarProductId; });
-      if (jp && App.doseBasisOf(jp) !== 'mgL') return;
+      if (jp && App.entryDoseBasisOf(jp) !== 'mgL') return;
       var wj = (s.winner !== null && s.jars[s.winner]) ? s.jars[s.winner] : null;
       var ppm = wj ? App.jarPpm(wj.dose) : NaN;
       if (!isFinite(ppm)) return;
@@ -1426,7 +1441,7 @@
         id: App.recordId('up', App.allPumps()), mine: true, tag: 'MINE', tint: '#ECF7F3', tintText: '#0C8577',
         model: n.model.trim(), brand: n.brand.trim() || '—', type: n.type,
         maxFlow: n.maxFlow.trim() || '—', maxPress: n.maxPress.trim() || '—',
-        control: n.control, note: n.note.trim() || 'Added manually from datasheet.', verified: 'datasheet'
+        control: n.control, note: n.note.trim() || 'User-declared capacity; confirm exact model and operating duty.', verified: 'custom', sourceType: 'user-entry', operationalApproval: 'user-declared, not supplier-certified'
       };
       var foundPumps = [pump].concat(App.state.foundPumps);
       if (!App.persistPumps(foundPumps)) { App.setState({ storageError: 'Could not write to this device’s storage — the pump is NOT saved. Keep this form and try again after backing up/freeing space.' }); return; }
@@ -1443,36 +1458,8 @@
     lookupPump: function () {
       var query = (App.state.pumpQuery || '').trim();
       if (!query) return;
-      if (window.claude && typeof window.claude.complete === 'function') {
-        App.setState({ pumpLoading: true, pumpError: '' });
-        var prompt = 'You are a chemical metering / dosing pump specification assistant. For the pump model "' + query + '", return ONLY minified JSON, no markdown, no prose, with this exact shape: {"model":"","brand":"","type":"","maxFlow":"","maxPress":"","control":"","note":""}. Rules: maxFlow like "30 L/h" or "500 mL/min"; maxPress like "16 bar"; type one of "Solenoid diaphragm","Motor diaphragm","Digital diaphragm","Peristaltic","Progressive cavity"; control like "Digital","Analog / pulse","Stroke + VFD"; note = one short sentence on typical use. If you are unsure of the exact model, give best-estimate figures for that product family and still fill every field.';
-        window.claude.complete({ messages: [{ role: 'user', content: prompt }], max_tokens: 400 }).then(function (raw) {
-          try {
-            var cleaned = String(raw).replace(/```json/gi, '').replace(/```/g, '').trim();
-            var m = cleaned.match(/\{[\s\S]*\}/);
-            var j = JSON.parse(m ? m[0] : cleaned);
-            var pump = {
-              id: App.recordId('f', App.allPumps()), ai: true, tag: 'AI', tint: '#EDE7F7', tintText: '#6A4CA0',
-              model: j.model || query, brand: j.brand || '—', type: j.type || '—',
-              maxFlow: j.maxFlow || '—', maxPress: j.maxPress || '—', control: j.control || '—',
-              note: j.note || '', verified: 'ai'
-            };
-            App.mutateSaved(['ctf_pumps_v1'], function () {
-              var foundPumps = [pump].concat(App.state.foundPumps);
-              if (!App.persistPumps(foundPumps)) { App.setState({ pumpLoading: false, storageError: 'Could not write to this device’s storage — the lookup pump is NOT saved. Keep the query and try again after backing up/freeing space.' }); return; }
-              App.setState({ storageError: '', foundPumps: foundPumps, pumpLoading: false, pumpQuery: pump.model });
-            });
-          } catch (e2) {
-            App.setState({ pumpLoading: false, pumpError: 'Could not retrieve specs for “' + query + '”. Check the spelling of the model, or add it manually from the datasheet.' });
-          }
-        }).catch(function () {
-          App.setState({ pumpLoading: false, pumpError: 'Could not retrieve specs for “' + query + '”. Check the spelling of the model, or add it manually from the datasheet.' });
-        });
-      } else {
-        // Offline / standalone: pre-fill the manual add form with the query.
-        var npu = Object.assign({}, App.state.npu, { model: query });
-        App.setState({ showPumpForm: true, npu: npu, pumpError: 'Offline — automatic lookup needs a connection. Enter the specs from the datasheet below (the model name is pre-filled), or check your saved pumps.' });
-      }
+      var npu = Object.assign({}, App.state.npu, { model: query });
+      App.setState({ pumpLoading: false, showPumpForm: true, npu: npu, pumpError: 'Automatic specification lookup is not supported. Enter user-declared values from the current first-party document for the exact model, frequency and operating pressure. No estimated family figures are retrieved.' });
     },
 
     // clients

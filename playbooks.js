@@ -26,14 +26,12 @@ window.PLAYBOOKS = {
       id: 'potable', tag: 'POT', tint: '#E7F1FB', tintText: '#1D5F99',
       name: 'Potable surface water',
       mech: 'Charge neutralisation · adsorption · sweep floc · NOM removal',
-      intro: 'The application where surrogate prediction works best. UV254 and colour flag natural-organic-matter demand; turbidity flags particle loading — neither is sufficient alone, so read them together and confirm with a compact jar test.',
+      intro: 'Turbidity, UV254 and colour are descriptive measurements, not dose predictors. Low turbidity can still require more alum than more turbid water (NHMRC ADWG). Confirm treatment objectives, product, dose and post-dose pH by jar and plant testing.',
       outputs: [
-        'Likely optimum coagulant family',
-        'Approximate active Al or Fe dose',
-        'Whether alkalinity supplementation is likely',
-        'Expected post-dose pH',
-        'Charge neutralisation vs sweep flocculation lean',
-        'Polymer-aid starting range'
+        'Coagulant grade and formulation suitable for the treatment objective',
+        'As-supplied dose and any separately verified reference mass basis',
+        'Post-dose pH and alkalinity requirements measured in testing, not calculated here',
+        'Polymer-aid performance and residual/contaminant compliance'
       ],
       measure: [
         { n: 'Raw & post-dose pH', why: 'coagulation window and acid demand' },
@@ -54,6 +52,10 @@ window.PLAYBOOKS = {
         body: 'Dose as mg/L of product on the treated flow — this is the Concentration mode in the Dosing Calc. Quote active Al or Fe where the comparison is between coagulants.'
       },
       cautions: [
+        'Potable residual targets (NHMRC ADWG): acid-soluble aluminium should not exceed 0.2 mg/L, preferably below 0.1 mg/L — aesthetic guidance; iron should not exceed 0.3 mg/L — aesthetic guidance, not universal health maxima.',
+        'Acrylamide should not exceed 0.0002 mg/L in drinking water — health-based NHMRC guidance. Unknown residual monomer content means nominal polymer dose alone cannot establish compliance or a safe maximum dose.',
+        'Use a documented potable-suitable grade with current supplier and water-authority acceptance, contaminant/monomer information, checked batch analysis certificates and quality assurance. No library badge proves approval; one certification scheme is not mandatory everywhere (NHMRC quality assurance, section 8.6.2).',
+        'Jar-to-plant matching: use the same chemical sequence and representative mixing/contact conditions; jar results do not guarantee plant performance (Oregon jar-test training).',
         'Never select a product on settled turbidity alone — visually impressive floc can still give poor filtered-water quality or excessive residual metal.',
         'Jar testing, streaming current, zeta potential and pilot filtration are complementary control methods, not interchangeable ones (per the playbook brief, citing EPA guidance).'
       ],
@@ -73,12 +75,12 @@ window.PLAYBOOKS = {
       id: 'sewage', tag: 'SEW', tint: '#EAF5EC', tintText: '#2C7A45',
       name: 'Municipal wastewater — liquid stream',
       mech: 'Colloid capture · CEPT · phosphorus precipitation',
-      intro: 'Chemical demand can come from suspended solids, soluble organics, phosphate, detergents and biological colloids — so measure total AND 0.45 µm filtered fractions. Particulate COD = total COD − filtered COD; coagulation removes particulate and colloidal COD far more readily than truly dissolved COD.',
+      intro: 'Chemical demand can come from suspended solids, soluble organics, phosphate, detergents and biological colloids — so measure total AND 0.45 µm filtered fractions. The total-minus-filtered COD difference is an operational filter-retained fraction, not proof of true dissolved or coagulation-resistant COD. Use a documented filtration protocol and site trials.',
       measure: [
         { n: 'Total suspended solids', why: 'clarification target' },
         { n: 'Turbidity', why: 'quick surrogate for solids' },
         { n: 'Total COD', why: 'organic load' },
-        { n: 'Filtered COD (0.45 µm)', why: 'splits coagulable from dissolved' },
+        { n: 'Filtered COD (0.45 µm)', why: 'operationally filtered fraction; not definitive dissolved or non-coagulable COD' },
         { n: 'Orthophosphate & total P', why: 'chemical P-removal demand' },
         { n: 'pH & alkalinity', why: 'metal-salt dosing depresses both' },
         { n: 'Conductivity & temperature', why: 'background conditions' },
@@ -93,6 +95,7 @@ window.PLAYBOOKS = {
         body: 'Keep separate dose models for: primary influent, secondary-effluent polishing, phosphorus precipitation, wet-weather sewage, and industrially-influenced sewage. One model per site per objective.'
       },
       cautions: [
+        'Unreacted or excess polymer, particularly cationic polymer, reaching receiving waters can harm aquatic life. Check product hazard information, site discharge criteria and treatment/source controls. ANZG does not establish a universal safe dose or legal discharge limit for these varied polymers.',
         'Best phosphorus removal does not sit at the lowest charge — metal salts also remove P by precipitation and adsorption onto metal-hydroxide solids. Judge P removal by residual ortho-P, not floc appearance.'
       ],
       products: [{ label: 'Browse coagulants (ferric · alum · PACl)', filter: 'Coagulant' }],
@@ -150,12 +153,12 @@ window.PLAYBOOKS = {
         {
           title: 'Oily / emulsified',
           m: 'Free & emulsified oil · oil & grease · turbidity · total & filtered COD · pH · conductivity · surfactant loading · emulsion stability',
-          note: 'The challenge is emulsion breaking, not mineral-particle charge. Screen acidic and alkaline pH adjustment, inorganic coagulants and cationic organic coagulants. Judge on oil removal, COD removal, clarity, flotation/settling response, sludge volume and filterability.'
+          note: 'Screen and segregate first: cyanide-bearing and Cr(VI)-bearing streams require validated dedicated pretreatment before hydroxide precipitation (EPA metal finishing). If cyanide is possible, stop generic acid screening: acids can release highly toxic hydrogen cyanide (NIOSH sodium cyanide). Qualified operators must follow specialist/site procedures; no universal combined-stream sequence or acid/chlorine recipe is provided. The challenge is emulsion breaking, not mineral-particle charge. Only after the hazard screen and site authorization, assess pH adjustment, inorganic coagulants and cationic organic coagulants. Judge on oil removal, COD removal, clarity, flotation/settling response, sludge volume and filterability.'
         },
         {
           title: 'Metal finishing & mine water',
           m: 'Dissolved & total metals · pH · ORP · alkalinity or acidity · sulphate · conductivity · complexing agents · TSS',
-          note: 'The programme is controlled by hydroxide solubility, oxidation state, precipitation pH and complexation — then flocculation. Raw-water charge matters less than hitting the right precipitation pH.'
+          note: 'Screen and segregate first: cyanide-bearing and Cr(VI)-bearing streams require validated dedicated pretreatment before hydroxide precipitation (EPA metal finishing). If cyanide is possible, stop generic acid screening: acids can release highly toxic hydrogen cyanide (NIOSH sodium cyanide). Qualified operators must follow specialist/site procedures; no universal combined-stream sequence or acid/chlorine recipe is provided. The programme is controlled by hydroxide solubility, oxidation state, precipitation pH and complexation — then flocculation. Raw-water charge matters less than hitting the right precipitation pH.'
         },
         {
           title: 'Food & beverage',
@@ -177,6 +180,7 @@ window.PLAYBOOKS = {
         body: 'mg/L on flow for clarification chemistry; pH-adjust chemicals by titration to the target precipitation pH; polymers per dry tonne where sludge is the product.'
       },
       cautions: [
+        'Unreacted or excess polymer, particularly cationic polymer, reaching receiving waters can harm aquatic life. Check product hazard information, site discharge criteria and treatment/source controls. ANZG does not establish a universal safe dose or legal discharge limit for these varied polymers.',
         'No single charge measurement describes success in oily or coloured streams — industrial studies evaluate oil, COD, TSS and turbidity together (per the playbook brief).'
       ],
       products: [{ label: 'Browse coagulants & cationic organics', filter: 'Coagulant' }],
@@ -218,6 +222,7 @@ window.PLAYBOOKS = {
       },
       progUnit: 'gt',
       cautions: [
+        'Unreacted or excess polymer, particularly cationic polymer, reaching receiving waters can harm aquatic life. Check product hazard information, site discharge criteria and treatment/source controls. ANZG does not establish a universal safe dose or legal discharge limit for these varied polymers.',
         'Clay identity matters: salinity can improve settling for one clay system and impair another — kaolinite, bentonite and illite settle differently in saline water (per the brief). Conductivity is not a universal correction factor.',
         'High-pH seawater systems: one tailings study found impaired flocculation above ~pH 10.3 under its tested conditions — a site-specific finding, not a universal limit. Magnesium precipitation changes particle surface area and polymer requirement.'
       ],
