@@ -72,6 +72,7 @@
       guideReadings: {}, guideSaveClient: '', guideSaveName: '', guideSaved: false, guideSaveError: '',
       guideProgProductId: '', guideProgPickerOpen: false, guideProgPickerQuery: '',
       guideProgDose: '', guideProgMassBasis: 'unknown', guideProgDoseUnit: 'mgL', guideProgFlow: '', guideProgFlowUnit: 'm3h',
+      guideProgSludgeDensity: '', guideProgDs: '', guideProgScalar: '', guideProgSource: null, guideProgRestoreError: '',
       guideProgFor: '', guideProgByPb: {},
       jarCurrentDose: '', bracketNote: '',
       mgSample: '500', mgSolids: '30', mgStock: '0.1', mgMl: '',
@@ -131,6 +132,7 @@
         }
         self.state[k.state] = list;
       });
+      this.invalidateProgrammeAuthorities();
       this.invalidateSavedSnapshots();
     },
     isRec: function (r) { return !!r && typeof r === 'object' && !Array.isArray(r); },
@@ -629,8 +631,8 @@
       if (numericUnavailable) warnings.push({ text: 'A derived rate exceeds the representable numeric range or underflows. No zero-rate or pump-setting confirmation is inferred; check the entered magnitudes.', bg: '#FBEBE7', border: '#E9C4B9', color: '#8A3A24' });
       if ((!neat && !strengthOk) || (neat && (!liquid || !(rho > 0)))) warnings.push({ text: 'Invalid strength or density. Neat feed requires liquid product and confirmed kg/L density. Solution strength is g as-supplied product per 100 mL FINAL solution, not percent neat; it cannot exceed the neat mass per volume.', bg: '#FBEBE7', border: '#E9C4B9', color: '#8A3A24' });
       if (!(pumpMax > 0)) warnings.push({ text: 'Pump capacity unavailable or ambiguous. Enter a confirmed capacity in L/h at operating pressure; bare gallons and multi-model annotations are not interpreted.', bg: '#FBF6EC', border: '#EBD9BC', color: '#8A5E17' });
-      if (!isFinite(this.flowFactor(s.calcMode === 'sludge' ? s.sludgeFlowUnit : s.flowUnit))) warnings.push({ text: 'Flow unit is unknown or missing. Confirm the flow unit explicitly before calculating delivery or catch advice; historical records are retained unchanged.', bg: '#FBF9F4', border: '#E2DDD0', color: '#6B776F' });
-      if (!ok) warnings.push({ text: 'Invalid or missing flow, dose or solids values. Use plain non-negative decimal numbers (decimal point, no commas or grouping); flow and density must be positive, dry solids 0–100%.', bg: '#FBF9F4', border: '#E2DDD0', color: '#6B776F' });
+      if (!isFinite(this.flowFactor(s.calcMode === 'sludge' ? s.sludgeFlowUnit : s.flowUnit))) warnings.push({ text: 'Flow unit is unknown or missing. Confirm the flow unit explicitly before calculating delivery or catch advice; historical records are retained unchanged.', bg: '#FBF9F4', border: '#E2DDD0', color: '#56635B' });
+      if (!ok) warnings.push({ text: 'Invalid or missing flow, dose or solids values. Use plain non-negative decimal numbers (decimal point, no commas or grouping); flow and density must be positive, dry solids 0–100%.', bg: '#FBF9F4', border: '#E2DDD0', color: '#56635B' });
       if (isFinite(strokePct) && strokePct > 100) warnings.push({ text: 'Pump stroke exceeds 100% — this pump is too small for the required feed, or dilute the solution less (higher %). Consider a larger pump.', bg: '#FBEBE7', border: '#E9C4B9', color: '#8A3A24' });
       else if (isFinite(strokePct) && strokePct < 10 && strokePct > 0) warnings.push({ text: 'Pump running below ~10% stroke — accuracy suffers at very low output. Consider a smaller pump or a more dilute solution.', bg: '#FBF6EC', border: '#EBD9BC', color: '#8A5E17' });
       var cp = this.allProducts().find(function (p) { return p.id === s.calcProductId; });
@@ -821,46 +823,92 @@
       }
       return mismatch; // mg/L-basis product in sludge mode
     },
-    // Current dosing programme entered in a playbook: window check + consumption.
-    computeProg: function () {
+    // Programme entry grammar is separate from qualified supplier source windows.
+    programmeDose: function (raw) {
+      var text = String(raw || '').trim(), pieces = text.split(/\s*(?:[–—-]|\bto\b)\s*/i);
+      if (pieces.length > 2) return null;
+      var lo = this.parseNum(pieces[0]), hi = pieces.length === 2 ? this.parseNum(pieces[1]) : lo;
+      return lo > 0 && hi >= lo && isFinite(hi) ? { lo: lo, hi: hi, range: pieces.length === 2 } : null;
+    },
+    programmeSourceMatches: function (slate) {
+      if (!slate.productId) return true; // explicit unknown/manual product
+      var product = this.allProducts().find(function (p) { return p.id === slate.productId; });
+      return !!product && !!slate.source && JSON.stringify(product) === JSON.stringify(slate.source);
+    },
+    invalidateProgrammeAuthorities: function () {
       var s = this.state;
+      if (!this.programmeSourceMatches(this.programmeSlate())) s.guideProgScalar = '';
+      for (var id in s.guideProgByPb) {
+        if (!this.programmeSourceMatches(s.guideProgByPb[id])) s.guideProgByPb[id].scalar = '';
+      }
+    },
+    programmeScalar: function () {
+      var s = this.state, dose = this.programmeDose(s.guideProgDose);
+      if (!this.programmeSourceMatches(this.programmeSlate())) return NaN;
+      if (s.guideProgRestoreError || !dose || s.guideProgMassBasis !== 'as-supplied' || ['mgL', 'kgt', 'gt'].indexOf(s.guideProgDoseUnit) < 0) return NaN;
+      var val = dose.range ? this.parseNum(s.guideProgScalar) : dose.lo;
+      return val >= dose.lo && val <= dose.hi ? val : NaN;
+    },
+    computeProg: function () {
+      var s = this.state, self = this;
       var p = this.allProducts().find(function (x) { return x.id === s.guideProgProductId; }) || null;
-      var d = this.parseNum(s.guideProgDose); // strict: '1,000' and '5-10' abstain, negatives rejected
-      if (!(d > 0) || s.guideProgMassBasis !== 'as-supplied') d = NaN;
-      var basis = s.guideProgDoseUnit; // mgL | kgt | gt
-      var win = s.guideProgMassBasis !== 'as-supplied' ? { abstain: true, name: p ? p.name : 'Programme', raw: s.guideProgDose, rawUnit: this.doseUnitLabel(basis), reason: 'Programme dose is active ingredient or unknown basis. Confirm as-supplied product mass; no active-fraction conversion is assumed.' } : null, unitMismatch = false;
-      if (p && isFinite(d) && this.doseAbstention(p, s.guideId)) { win = this.doseAbstention(p, s.guideId); }
-      else if (p && isFinite(d)) {
-        var pBasis = this.doseBasisOf(p);
-        var val = NaN;
-        if (pBasis && basis === pBasis) val = d;
-        else if (basis === 'kgt' && pBasis === 'gt') val = d * 1000;
-        else if (basis === 'gt' && pBasis === 'kgt') val = d / 1000;
-        if (isFinite(val)) {
-          win = this.doseWindowFor(p, val, s.guideId);
-          if (win) win.converted = basis !== pBasis;
-        } else unitMismatch = true;
+      var dose = this.programmeDose(s.guideProgDose), basis = s.guideProgDoseUnit;
+      var confirmed = !s.guideProgRestoreError && s.guideProgMassBasis === 'as-supplied' && ['mgL', 'kgt', 'gt'].indexOf(basis) >= 0;
+      var win = null, rangeWin = null, unitMismatch = false;
+      var reason = s.guideProgRestoreError || (!confirmed ? 'Confirm supported dose units and as-supplied product mass. Active or unknown basis cannot be converted without a verified active fraction.' : (!dose ? 'Enter a positive scalar or ordered dose endpoints, e.g. 2–4. Grouped, negative and mixed-unit entries are unsupported.' : ''));
+      if (reason) win = { abstain: true, name: p ? p.name : 'Programme', raw: s.guideProgDose, rawUnit: this.doseUnitLabel(basis), reason: reason };
+      else if (p) {
+        win = this.doseAbstention(p, s.guideId);
+        if (!win) {
+          var pBasis = this.doseBasisOf(p), factor = basis === pBasis ? 1 : (basis === 'kgt' && pBasis === 'gt' ? 1000 : (basis === 'gt' && pBasis === 'kgt' ? 0.001 : NaN));
+          if (isFinite(factor)) {
+            win = this.doseWindowFor(p, dose.lo * factor, s.guideId);
+            if (win) win.converted = factor !== 1;
+            if (dose.range) { rangeWin = this.doseWindowFor(p, dose.hi * factor, s.guideId); if (rangeWin) rangeWin.converted = factor !== 1; }
+          } else unitMismatch = true;
+        }
       }
       var Q = this.parseNum(s.guideProgFlow) * this.flowFactor(s.guideProgFlowUnit);
-      if (!(Q > 0)) Q = NaN;
-      var kgH = (basis === 'mgL' && isFinite(Q) && isFinite(d)) ? this.finiteResult(Q * d / 1000, true) : NaN;
+      var rho = this.parseNum(s.guideProgSludgeDensity), ds = this.parseNum(s.guideProgDs);
+      var mult = basis === 'mgL' ? Q / 1000 : Q * rho * ds / 100 * (basis === 'gt' ? 0.001 : 1);
+      var balance = basis === 'mgL' || (rho > 0 && ds > 0 && ds <= 100);
+      var bounds = confirmed && dose && Q > 0 && balance ? [this.finiteResult(mult * dose.lo, true), this.finiteResult(mult * dose.hi, true)] : [];
+      var hasCons = bounds.length === 2 && bounds.every(function (n) { return isFinite(n); });
+      if (!hasCons) bounds = [];
+      var display = function (factor, dp) { return hasCons ? bounds.map(function (n) { return self.fmt(n * factor, dp); }).filter(function (n, i, a) { return !i || n !== a[0]; }).join('–') : '—'; };
       return {
-        product: p, win: win, unitMismatch: unitMismatch,
-        kgH: this.fmt(kgH, 2), kgDay: this.fmt(kgH * 24, 1), hasCons: isFinite(kgH),
-        canRetest: basis === 'mgL' && isFinite(d),
-        canSend: !!p || isFinite(d) || isFinite(Q)
+        product: p, win: win, rangeWin: rangeWin, unitMismatch: unitMismatch, doseBounds: dose ? [dose.lo, dose.hi] : [],
+        kgHBounds: bounds, kgH: display(1, 2), kgDay: display(24, 1), hasCons: hasCons,
+        consumptionBasis: basis === 'mgL' ? 'flow × dose; as-supplied product mass' : 'Q × slurry density × dry solids % / 100 × dose; as-supplied product mass per dry tonne',
+        consumptionReason: hasCons ? '' : (reason || (basis === 'mgL' ? 'Confirm positive flow and its unit.' : 'Dry-tonne consumption requires explicit positive flow, slurry density (kg/L) and dry solids (0–100% w/w). No density or solids default is assumed.')),
+        canRetest: confirmed && basis === 'mgL' && isFinite(this.programmeScalar()),
+        canSend: !!p || !!dose || Q > 0
       };
     },
 
     // ---- state plumbing -----------------------------------------------------
     setState: function (patch, jarConfirmed) {
       var s = this.state;
+      // A scalar is an operator choice under one dosing authority, not a value
+      // that silently follows a different product, source, basis or endpoints.
+      // Explicit full-slate transitions (open/recall) carry their own selection.
+      var authorityChanged = ['guideProgProductId', 'guideProgSource', 'guideProgDose', 'guideProgDoseUnit', 'guideProgMassBasis', 'guideProgFor', 'guideProgRestoreError'].some(function (key) {
+        return Object.prototype.hasOwnProperty.call(patch, key) && JSON.stringify(patch[key]) !== JSON.stringify(s[key]);
+      });
+      if (Object.prototype.hasOwnProperty.call(patch, 'customProducts') && s.guideProgProductId) {
+        var selectedId = s.guideProgProductId;
+        var oldProduct = this.allProducts().find(function (p) { return p.id === selectedId; });
+        var newProduct = this.PRODUCTS.concat(patch.customProducts).find(function (p) { return p.id === selectedId; });
+        if (JSON.stringify(oldProduct) !== JSON.stringify(newProduct)) authorityChanged = true;
+      }
+      if (authorityChanged && !Object.prototype.hasOwnProperty.call(patch, 'guideProgScalar')) patch.guideProgScalar = '';
       var preparationChanged = ['jarVol', 'stockPct', 'jarVolumeBasis', 'jarProductId'].some(function (key) { return Object.prototype.hasOwnProperty.call(patch, key) && patch[key] !== s[key]; }) || (patch.jars && JSON.stringify(patch.jars.map(function (j) { return j.dose; })) !== JSON.stringify(s.jars.map(function (j) { return j.dose; })));
       if (!jarConfirmed && preparationChanged && (s.winner !== null || s.jars.some(function (j) { return j.ph || j.turb || j.floc; }))) return this.editJarSetup(patch);
       // A catch belongs to the pump, media and operating setup it measured.
       if (['selectedCalcPumpId', 'pumpSource', 'pumpMax', 'calcProductId', 'form', 'feedBasis', 'density', 'makedown', 'calcMode', 'flow', 'flowUnit', 'dose', 'sludgeFlow', 'sludgeFlowUnit', 'ds', 'doseKg', 'sludgeDensity', 'foundPumps', 'customProducts'].some(function (key) { return Object.prototype.hasOwnProperty.call(patch, key) && patch[key] !== s[key]; })) { patch.calMl = ''; patch.calSec = ''; }
       if (['jarVol', 'stockPct', 'jarVolumeBasis', 'jars', 'winner', 'jarProductId'].some(function (key) { return Object.prototype.hasOwnProperty.call(patch, key) && patch[key] !== s[key]; })) patch.jarSaved = false;
       Object.assign(s, patch);
+      this.invalidateProgrammeAuthorities();
       if (Object.prototype.hasOwnProperty.call(patch, 'clients') || Object.prototype.hasOwnProperty.call(patch, 'jarTests')) this.invalidateSavedSnapshots();
       this.render();
     },
@@ -921,13 +969,30 @@
     // moment its jars are edited again. Not persisted — a reload loses the live
     // state too, which is exactly what the guard exists to prevent.
     _snap: { readings: {}, prog: {}, jars: '' },
+    programmeSlate: function () {
+      var s = this.state;
+      return { productId: s.guideProgProductId, dose: s.guideProgDose, doseUnit: s.guideProgDoseUnit, flow: s.guideProgFlow, flowUnit: s.guideProgFlowUnit, massBasis: s.guideProgMassBasis, slurryDensity: s.guideProgSludgeDensity, ds: s.guideProgDs, scalar: s.guideProgScalar, source: s.guideProgSource, restoreError: s.guideProgRestoreError, observedDate: s.guideObservedDate, observedTime: s.guideObservedTime, observedOffset: s.guideObservedOffset, saveClient: s.guideSaveClient, saveName: s.guideSaveName };
+    },
     progSig: function (slate) {
-      var hasData = String(slate.dose || '').trim() || String(slate.flow || '').trim() || slate.productId;
-      return hasData ? JSON.stringify([slate.productId || '', slate.dose || '', slate.doseUnit || '', slate.flow || '', slate.flowUnit || '', slate.massBasis || 'unknown']) : '';
+      var hasData = String(slate.dose || '').trim() || String(slate.flow || '').trim() || slate.productId || slate.slurryDensity || slate.ds || slate.scalar || slate.source || slate.restoreError;
+      return hasData ? JSON.stringify([slate.productId || '', slate.dose || '', slate.doseUnit || '', slate.flow || '', slate.flowUnit || '', slate.massBasis || 'unknown', slate.slurryDensity || '', slate.ds || '', slate.scalar || '', slate.source || null, slate.restoreError || '']) : '';
+    },
+    guideDraftIsDirty: function (pb) {
+      var s = this.state, snap = this._snap;
+      var slate = s.guideProgFor === pb.id ? this.programmeSlate() : (s.guideProgByPb[pb.id] || {});
+      if (String(slate.saveName || '').trim()) return true;
+      var sig = this.progSig(slate);
+      if ((sig || snap.prog[pb.id]) && snap.prog[pb.id] !== sig) return true;
+      var observation = JSON.stringify([slate.observedDate || '', slate.observedTime || '', slate.observedOffset || '']);
+      if ((slate.observedDate || slate.observedTime || slate.observedOffset || (snap.observation && snap.observation[pb.id])) && (!snap.observation || snap.observation[pb.id] !== observation)) return true;
+      return pb.fields.some(function (f) {
+        var key = pb.id + ':' + f.k;
+        return (String(s.guideReadings[key] || '').trim() || Object.prototype.hasOwnProperty.call(snap.readings, key)) && snap.readings[key] !== s.guideReadings[key];
+      });
     },
     liveProgSig: function () {
       var s = this.state;
-      return this.progSig({ productId: s.guideProgProductId, dose: s.guideProgDose, doseUnit: s.guideProgDoseUnit, flow: s.guideProgFlow, flowUnit: s.guideProgFlowUnit, massBasis: s.guideProgMassBasis });
+      return this.progSig(this.programmeSlate());
     },
     jarsSig: function () {
       var s = this.state;
@@ -942,21 +1007,22 @@
     hasUnsavedFieldData: function () {
       if (this._mutationBusy || this._restoreRecovery) return true;
       var s = this.state, snap = this._snap;
-      if (s.showClientForm || s.showProductForm || s.showPumpForm || s.showJarSave) return true;
+      if (s.showClientForm || s.showProductForm || s.showPumpForm || s.showJarSave || String(s.guideSaveName || '').trim()) return true;
       // Conservative: a changed calculation can include memory-only catch inputs.
       if (this.calcInputSig() !== this._initialCalcSig) return true;
       for (var k in s.guideReadings) {
-        if (String(s.guideReadings[k] || '').trim() && snap.readings[k] !== s.guideReadings[k]) return true;
+        if ((String(s.guideReadings[k] || '').trim() || Object.prototype.hasOwnProperty.call(snap.readings, k)) && snap.readings[k] !== s.guideReadings[k]) return true;
       }
       if (s.guideProgFor && (s.guideObservedDate || s.guideObservedTime || s.guideObservedOffset || (snap.observation && snap.observation[s.guideProgFor])) && (!snap.observation || snap.observation[s.guideProgFor] !== this.observationSig())) return true;
       if (s.guideProgFor) {
         var liveSig = this.liveProgSig();
-        if (liveSig && snap.prog[s.guideProgFor] !== liveSig) return true;
+        if ((liveSig || snap.prog[s.guideProgFor]) && snap.prog[s.guideProgFor] !== liveSig) return true;
       }
       for (var pid in s.guideProgByPb) {
         var sig = this.progSig(s.guideProgByPb[pid] || {});
-        if (sig && snap.prog[pid] !== sig) return true;
+        if ((sig || snap.prog[pid]) && snap.prog[pid] !== sig) return true;
         var parked = s.guideProgByPb[pid] || {};
+        if (String(parked.saveName || '').trim()) return true;
         if ((parked.observedDate || parked.observedTime || parked.observedOffset || (snap.observation && snap.observation[pid])) && (!snap.observation || snap.observation[pid] !== JSON.stringify([parked.observedDate || '', parked.observedTime || '', parked.observedOffset || '']))) return true;
       }
       var jarsHaveData = s.winner !== null || String(s.jarCurrentDose || '').trim() !== '' ||
@@ -1008,13 +1074,13 @@
 
     // ---- style factories (from design) -------------------------------------
     navStyle: function (active) {
-      return { flex: 1, border: 'none', background: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '3px', padding: '6px 2px', borderRadius: '10px', color: active ? '#4FE0B5' : '#7C8A84' };
+      return { flex: 1, border: 'none', background: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '3px', padding: '6px 2px', borderRadius: '10px', color: active ? '#4FE0B5' : '#ACBEB5' };
     },
     segStyle: function (active) {
-      return { flex: 1, border: 'none', cursor: 'pointer', borderRadius: '9px', padding: '9px 6px', fontSize: '13px', fontWeight: 700, lineHeight: 1.15, background: active ? '#16211F' : 'transparent', color: active ? '#EFECE3' : '#6B776F' };
+      return { flex: 1, border: 'none', cursor: 'pointer', borderRadius: '9px', padding: '9px 6px', fontSize: '13px', fontWeight: 700, lineHeight: 1.15, background: active ? '#16211F' : 'transparent', color: active ? '#EFECE3' : '#56635B' };
     },
     segSmall: function (active) {
-      return { flex: 1, border: 'none', cursor: 'pointer', borderRadius: '8px', padding: '9px 6px', fontSize: '12.5px', fontWeight: 700, background: active ? '#0C8577' : 'transparent', color: active ? '#FFF' : '#6B776F' };
+      return { flex: 1, border: 'none', cursor: 'pointer', borderRadius: '8px', padding: '9px 6px', fontSize: '12.5px', fontWeight: 700, background: active ? '#087568' : 'transparent', color: active ? '#FFF' : '#56635B' };
     }
   };
 
@@ -1045,17 +1111,15 @@
       if (id !== s.guideProgFor) {
         var store = Object.assign({}, s.guideProgByPb);
         if (s.guideProgFor) {
-          store[s.guideProgFor] = {
-            productId: s.guideProgProductId, dose: s.guideProgDose, doseUnit: s.guideProgDoseUnit,
-            flow: s.guideProgFlow, flowUnit: s.guideProgFlowUnit, massBasis: s.guideProgMassBasis,
-            observedDate: s.guideObservedDate, observedTime: s.guideObservedTime, observedOffset: s.guideObservedOffset
-          };
+          store[s.guideProgFor] = App.programmeSlate();
         }
         var pb = (window.PLAYBOOKS && window.PLAYBOOKS.list.find(function (x) { return x.id === id; })) || null;
         var saved = store[id] || null;
         if (saved) delete store[id]; // the live slate owns it again — a stale copy would double-count as unsaved data
         patch.guideProgByPb = store;
         patch.guideProgFor = id;
+        patch.guideSaveClient = saved ? (saved.saveClient || '') : '';
+        patch.guideSaveName = saved ? (saved.saveName || '') : '';
         patch.guideObservedDate = saved ? (saved.observedDate || '') : '';
         patch.guideObservedTime = saved ? (saved.observedTime || '') : '';
         patch.guideObservedOffset = saved ? (saved.observedOffset || '') : '';
@@ -1065,6 +1129,12 @@
         patch.guideProgFlow = saved ? saved.flow : '';
         patch.guideProgDoseUnit = saved ? saved.doseUnit : ((pb && pb.progUnit) || 'mgL');
         patch.guideProgFlowUnit = saved ? saved.flowUnit : 'm3h';
+        patch.guideProgSludgeDensity = saved ? (saved.slurryDensity || '') : '';
+        patch.guideProgDs = saved ? (saved.ds || '') : '';
+        patch.guideProgScalar = saved ? (saved.scalar || '') : '';
+        patch.guideProgSource = saved ? (saved.source || null) : null;
+        patch.guideProgRestoreError = saved ? (saved.restoreError || '') : '';
+        patch.guideSaved = !!saved && !!pb && App._snap.prog[id] === App.progSig(saved) && !!(App._snap.guideBacking && App._snap.guideBacking[id]) && pb.fields.every(function (f) { var key = id + ':' + f.k; return App._snap.readings[key] === s.guideReadings[key]; }) && (!App._snap.observation || App._snap.observation[id] === JSON.stringify([saved.observedDate || '', saved.observedTime || '', saved.observedOffset || '']));
         patch.guideProgPickerOpen = false; patch.guideProgPickerQuery = '';
       }
       App.setState(patch);
@@ -1106,7 +1176,8 @@
       App.setState({ guideProgPickerOpen: open, guideProgPickerQuery: '' });
     },
     pickGuideProgProduct: function (el) {
-      App.setState({ guideProgProductId: el.dataset.id, guideProgPickerOpen: false, guideProgPickerQuery: '', guideSaved: false, guideSaveError: '' });
+      var p = App.allProducts().find(function (x) { return x.id === el.dataset.id; });
+      App.setState({ guideProgProductId: el.dataset.id, guideProgSource: p ? JSON.parse(JSON.stringify(p)) : null, guideProgPickerOpen: false, guideProgPickerQuery: '', guideSaved: false, guideSaveError: '' });
     },
     // Carry the plant's current programme into the calculator. An explicit
     // "send" action is allowed to set the matching calc mode.
@@ -1117,8 +1188,9 @@
       // a stale selection would grade this plant's dose against the wrong datasheet.
       var patch = Object.assign({ screen: 'calc', calcProductId: p ? p.id : '', flow: '', dose: '', sludgeFlow: '', ds: '', doseKg: '', sludgeDensity: '', calMl: '', calSec: '', selectedCalcPumpId: '', pumpSource: 'manual', pumpMax: '' }, App.productCalcPatch(p));
       patch.calcHandoffNote = s.guideProgMassBasis !== 'as-supplied' ? 'Dose not transferred: confirm as-supplied product mass. Active or unknown basis cannot be converted without a verified active fraction.' : '';
-      var d = s.guideProgMassBasis === 'as-supplied' ? App.parseNum(s.guideProgDose) : NaN;   // strict parse: only clean positive
-      var f = App.parseNum(s.guideProgFlow);   // numbers may reach the calculator
+      var d = App.programmeScalar();
+      if (!isFinite(d) && s.guideProgMassBasis === 'as-supplied') patch.calcHandoffNote = 'Dose not transferred: select an explicit scalar within the entered range. No midpoint is assumed.';
+      var f = isFinite(App.flowFactor(s.guideProgFlowUnit)) ? App.parseNum(s.guideProgFlow) : NaN;
       if (s.guideProgDoseUnit === 'mgL') {
         patch.calcMode = 'conc';
         if (d > 0) patch.dose = App.decimalText(d);
@@ -1129,10 +1201,12 @@
         if (d > 0 && isFinite(convertedDose)) patch.doseKg = App.decimalText(convertedDose);
         else if (d > 0) patch.calcHandoffNote = 'Dose not transferred: the unit conversion underflows or exceeds the representable numeric range.';
         if (f > 0) { patch.sludgeFlow = App.decimalText(f); patch.sludgeFlowUnit = s.guideProgFlowUnit; }
-        // carry the solids reading collected on this playbook screen — the calc's
-        // stale % DS default would silently mis-state consumption otherwise
-        var sv = App.parseNum(s.guideReadings[s.guideId + ':solids']);
+        // Programme DS is an explicit mass-balance input. A separate measured
+        // Guide reading is not consent to adopt it; missing context stays blank.
+        var sv = App.parseNum(s.guideProgDs);
         if (sv > 0 && sv <= 100) patch.ds = App.decimalText(sv);
+        var rho = App.parseNum(s.guideProgSludgeDensity);
+        if (rho > 0) patch.sludgeDensity = App.decimalText(rho);
       } else { patch.calcMode = 'conc'; patch.calcHandoffNote = 'Dose not transferred: unknown or unsupported dose unit. Confirm mg/L, kg/t or g/t explicitly.'; }
       App.setState(patch);
     },
@@ -1140,7 +1214,7 @@
     // carrying the programme's product so the test is attributed correctly.
     guideProgRetest: function () {
       var s = App.state;
-      var d = App.parseNum(s.guideProgDose);
+      var d = App.programmeScalar();
       if (!(d > 0) || s.guideProgMassBasis !== 'as-supplied' || s.guideProgDoseUnit !== 'mgL') { App.setState({ bracketNote: 'Retest blocked: a dry-solids dose cannot become mg/L without a solids balance.' }); return; }
       var p = App.allProducts().find(function (x) { return x.id === s.guideProgProductId; }) || null;
       if (p && App.entryDoseBasisOf(p) !== 'mgL') { App.setState({ bracketNote: 'Retest blocked: product dose basis does not match mg/L.' }); return; }
@@ -1151,6 +1225,31 @@
       App.H.bracketJars();
       if (s.jars !== prev.jars) App.setState({ screen: 'jars', jarProductId: p ? p.id : '' });
       else App.setState({ jarCurrentDose: prev.jarCurrentDose, jarProductId: prev.jarProductId });
+    },
+    newGuideProgramme: function () {
+      if (!window.confirm('Clear the live programme for a fresh explicit setup? Saved history is unchanged.')) return;
+      App.setState({ guideProgProductId: '', guideProgSource: null, guideProgRestoreError: '', guideProgDose: '', guideProgScalar: '', guideProgMassBasis: 'unknown', guideProgFlow: '', guideProgSludgeDensity: '', guideProgDs: '', guideSaved: false, guideSaveError: '' });
+    },
+    recallGuideReading: function (el) {
+      var s = App.state, clients = s.clients.filter(function (c) { return c.id === el.dataset.clientId; });
+      var matches = clients.length === 1 ? (clients[0].readings || []).filter(function (r) { return r.id === el.dataset.readingId; }) : [];
+      var r = matches.length === 1 ? matches[0] : null;
+      var pb = r && window.PLAYBOOKS.list.find(function (p) { return p.id === r.playbookId; });
+      if (!r || !pb || !r.readingInputs || (r.prog && r.prog.schemaVersion !== 1)) { App.setState({ storageError: 'Recall unavailable: choose an exact stable saved ID with a complete programme context. Historical records are unchanged.' }); return; }
+      // Inspect the replacement target before openGuide consumes its parked slate.
+      // Outgoing drafts are parked, not replaced; consent applies only to this ID.
+      if (App.guideDraftIsDirty(pb) && !window.confirm('Replace this playbook\'s unsaved Guide draft with this exact saved reading/programme? Other playbook drafts and saved history are unchanged.')) return;
+      App.H.openGuide({ dataset: { id: pb.id } });
+      var g = r.prog || {}, readings = Object.assign({}, s.guideReadings), time = App.historicalObservation(r);
+      pb.fields.forEach(function (f) { readings[pb.id + ':' + f.k] = typeof r.readingInputs[f.k] === 'string' ? r.readingInputs[f.k] : ''; });
+      var at = time.observedAt, parsed = App.programmeDose(g.dose), source = App.allProducts().find(function (p) { return p.id === g.productId; });
+      var contextError = r.prog && (g.application !== pb.id || !Array.isArray(g.doseEndpoints) || JSON.stringify(g.doseEndpoints) !== JSON.stringify(parsed ? [parsed.lo, parsed.hi] : []) || (g.productId && (!source || !g.productSnapshot || JSON.stringify(source) !== JSON.stringify(g.productSnapshot)))) ? 'Saved programme context is unconfirmed or contradictory (application, endpoints or product source changed). History is unchanged; start a new programme and explicitly confirm its inputs.' : '';
+      App.setState({ screen: 'guide', guideId: pb.id, guideProgFor: pb.id, guideReadings: readings, guideSaveClient: clients[0].id, guideSaveName: '', guideSaveError: '', storageError: App.protectedStorageWarning(),
+        guideProgProductId: typeof g.productId === 'string' ? g.productId : '', guideProgSource: g.productSnapshot || null, guideProgRestoreError: contextError,
+        guideProgDose: typeof g.dose === 'string' ? g.dose : '', guideProgDoseUnit: typeof g.doseUnit === 'string' ? g.doseUnit : '', guideProgMassBasis: typeof g.massBasis === 'string' ? g.massBasis : 'unknown',
+        guideProgFlow: typeof g.flow === 'string' ? g.flow : '', guideProgFlowUnit: typeof g.flowUnitCode === 'string' ? g.flowUnitCode : '', guideProgSludgeDensity: typeof g.slurryDensity === 'string' ? g.slurryDensity : '', guideProgDs: typeof g.ds === 'string' ? g.ds : '', guideProgScalar: typeof g.scalar === 'string' ? g.scalar : '',
+        guideObservedDate: time.observedDate || '', guideObservedTime: at ? at.slice(11, 16) : '', guideObservedOffset: at ? at.slice(19) : '', guideProgPickerOpen: false, guideProgPickerQuery: '', guideSaved: true });
+      App._stampGuideSnap(pb, clients[0].id, r);
     },
     saveGuideReadings: function () {
       var s = App.state;
@@ -1165,11 +1264,14 @@
       var progP = App.allProducts().find(function (x) { return x.id === s.guideProgProductId; });
       var pd = (s.guideProgDose || '').trim(), pf = (s.guideProgFlow || '').trim();
       var prog = null;
-      if (progP || pd || pf) {
+      if (progP || vals.length || App.liveProgSig()) {
         prog = {
           product: progP ? progP.name : '',
           dose: pd, unit: App.doseUnitLabel(s.guideProgDoseUnit), massBasis: s.guideProgMassBasis || 'unknown',
-          flow: pf, flowUnit: App.flowLabel(s.guideProgFlowUnit)
+          flow: pf, flowUnit: App.flowLabel(s.guideProgFlowUnit),
+          schemaVersion: 1, productId: s.guideProgProductId || '', productSnapshot: s.guideProgSource || (progP ? JSON.parse(JSON.stringify(progP)) : null), application: pb.id,
+          doseUnit: s.guideProgDoseUnit, flowUnitCode: s.guideProgFlowUnit, doseEndpoints: App.computeProg().doseBounds,
+          slurryDensity: s.guideProgSludgeDensity, ds: s.guideProgDs, scalar: s.guideProgScalar
         };
       }
       if (!vals.length && !prog) {
@@ -1196,7 +1298,9 @@
       }
       var observation = App.observation();
       if (observation.error) { App.setState({ guideSaveError: observation.error }); return; }
-      var entry = Object.assign({ date: observation.observedDate || 'Observation date unknown', app: pb.name, values: vals, prog: prog }, observation);
+      var readingInputs = {};
+      pb.fields.forEach(function (f) { readingInputs[f.k] = s.guideReadings[pb.id + ':' + f.k] || ''; });
+      var entry = Object.assign({ date: observation.observedDate || 'Observation date unknown', app: pb.name, playbookId: pb.id, readingInputs: readingInputs, values: vals, prog: prog }, observation);
       // The record already holding exactly this entry (Save re-enabled by
       // navigation with nothing changed) is a success, not a duplicate — a
       // second identical append would only pollute the site history. Backstop
@@ -1208,6 +1312,7 @@
         App.setState({ guideSaved: true, guideSaveClient: cid, guideSaveError: '' });
         return;
       }
+      entry.id = App.recordId('reading-', clients.reduce(function (all, c) { return all.concat(c.readings || []); }, []));
       entry.savedAt = new Date().toISOString();
       clients = clients.map(function (c) {
         if (c.id !== cid) return c;
@@ -1346,25 +1451,11 @@
     },
     onFormLiquid: function () { App.changeCalcForm('liquid'); },
     onFormPowder: function () { App.changeCalcForm('powder'); },
-    onSelectProduct: function (el) {
-      var p = App.allProducts().find(function (x) { return x.id === el.value; }) || null;
-      // note: product selection no longer changes the calc mode — the user's
-      // Concentration/Sludge tab choice is left untouched.
-      App.setState(Object.assign({ calcProductId: el.value }, App.productCalcPatch(p)));
-    },
     onPumpSelect: function () { App.setState({ pumpSource: 'select' }); },
     onPumpManual: function () { App.setState({ pumpSource: 'manual' }); },
-    onSelectCalcPump: function (el) {
-      var p = App.allPumps().find(function (x) { return x.id === el.value; });
-      var v = p ? App.pumpCapacityOf(p) : NaN;
-      App.setState({ selectedCalcPumpId: el.value, pumpMax: (p && isFinite(v)) ? App.decimalText(v) : '' });
-    },
     startSaveClient: function () { App.setState({ screen: 'clients', showClientForm: true }); },
 
     // jars
-    onSelectJarProduct: function (el) {
-      App.H.pickJarProduct({ dataset: { id: el.value } });
-    },
     setStockStrength: function (el) { App.editJarSetup({ stockPct: el.dataset.v }); },
     onJarField: function (el) {
       var i = +el.dataset.i, f = el.dataset.f, v = el.value;
@@ -1438,7 +1529,7 @@
     confirmAddPump: function () {
       var n = App.state.npu; if (!n.model.trim()) return;
       var pump = {
-        id: App.recordId('up', App.allPumps()), mine: true, tag: 'MINE', tint: '#ECF7F3', tintText: '#0C8577',
+        id: App.recordId('up', App.allPumps()), mine: true, tag: 'MINE', tint: '#ECF7F3', tintText: '#087568',
         model: n.model.trim(), brand: n.brand.trim() || '—', type: n.type,
         maxFlow: n.maxFlow.trim() || '—', maxPress: n.maxPress.trim() || '—',
         control: n.control, note: n.note.trim() || 'User-declared capacity; confirm exact model and operating duty.', verified: 'custom', sourceType: 'user-entry', operationalApproval: 'user-declared, not supplier-certified'

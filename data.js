@@ -5552,7 +5552,7 @@ window.APP_DATA = {
    "maxPress": "04063: 4 bar; other family heads differ",
    "control": "Manual stroke-length (~1% steps); optional servo for analog control",
    "note": "Family envelope — maxima not simultaneous. Confirm exact model/head, frequency and operating pressure before using a capacity; family selection gives no capacity or stroke advice.",
-   "source": "Historical manufacturer manual (2003, BA VA 013 06/03 GB), p15; original URL now redirects to homepage | https://prominent.us/webroot/promx/pdf/vario_c_manual_english.pdf",
+   "source": "Historical manufacturer manual (2003, BA VA 013 06/03 GB), p15; dated retrieval observations, availability may vary | https://prominent.us/webroot/promx/pdf/vario_c_manual_english.pdf",
    "verified": "datasheet",
    "sourceType": "historical-extraction",
    "extractionConfidence": "high",
@@ -5562,7 +5562,7 @@ window.APP_DATA = {
    "fieldEvidence": {
     "capacity": "Historical extraction; exact model, pressure, frequency and operating duty require confirmation"
    },
-   "sourceCaution": "Historical 2003 Vario C manual (BA VA 013 06/03 GB), p15 table retained by evidence hash. Live historical PDF unavailable: original cited URL redirects to manufacturer homepage (checked 2026-10-03 UTC). No replacement historical PDF URL verified. The 2015 manual is not evidence for these historical table values. Confirm current exact model/head, frequency and operating duty; paired historical ratings are not capacity approval.",
+   "sourceCaution": "Historical 2003 Vario C manual (BA VA 013 06/03 GB), p15 table retained by evidence hash. Original URL returned publisher homepage HTML on 2026-10-03 at 15:30 UTC; an independent review check recorded on 2026-10-03 at 16:10:29 UTC returned the original PDF, byte-identical to retained evidence. Availability may vary. The 2015 manual is not evidence for these historical table values. Confirm current exact model/head, frequency and operating duty; paired historical ratings are not capacity approval.",
    "capacityLh": null,
    "familyEnvelope": true,
    "capacityPairs": [

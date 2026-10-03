@@ -15,7 +15,7 @@
  * while the site is down) must never overwrite a working app file — v15 did
  * exactly that and left installed phones showing a 404 even offline.
  */
-var BUILD = 'c253e99d0166';
+var BUILD = '1e541d36edd0';
 var CACHE = 'field-assistant-v16-' + BUILD;
 var PREFIX = 'field-assistant-';
 var CORE = [
@@ -27,7 +27,11 @@ var CORE = [
   'render.js',
   'manifest.webmanifest',
   'icon.svg',
-  'icon-maskable.svg'
+  'icon-maskable.svg',
+  'icon-180.png',
+  'icon-192.png',
+  'icon-512.png',
+  'icon-maskable-512.png'
 ];
 var CORE_URLS = CORE.map(function (p) { return new URL(p, self.location).href; });
 
@@ -76,6 +80,10 @@ self.addEventListener('install', function (e) {
         return fetch(reqs[p]).then(function (res) {
           if (!isGood(res)) throw new Error('install: bad response for ' + p + ' (' + res.status + ')');
           byPath[p] = res;
+          // Drain each network body as it arrives. Waiting for every response's
+          // headers first can exhaust the browser's limited fetch slots when
+          // an atomic release has many assets. Retain the original for caching.
+          return res.clone().arrayBuffer();
         });
       })).then(function () {
         return verifyBuild(byPath);
@@ -112,22 +120,6 @@ self.addEventListener('fetch', function (e) {
   var req = e.request;
   if (req.method !== 'GET') return;
   var url = new URL(req.url);
-
-  // Google Fonts: stale-while-revalidate; cache only usable responses.
-  if (url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com') {
-    e.respondWith(
-      caches.open(CACHE).then(function (cache) {
-        return cache.match(req).then(function (cached) {
-          var net = fetch(req).then(function (res) {
-            if (res && (res.ok || res.type === 'opaque')) cache.put(req, res.clone()).catch(function () {});
-            return res;
-          }).catch(function () { return cached || Response.error(); });
-          return cached || net;
-        });
-      })
-    );
-    return;
-  }
 
   if (url.origin !== self.location.origin) return;
 

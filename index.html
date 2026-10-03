@@ -2,28 +2,29 @@
 <html lang="en-AU">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Field Assistant — Treatment Toolkit</title>
   <meta name="description" content="Water-treatment field dosing assistant: product library, dosing &amp; feed-rate calculator, jar testing and pump specs. Works offline.">
-  <meta name="theme-color" content="#EEEAE1">
+  <meta name="theme-color" content="#16211F">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
-  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="apple-touch-icon" href="icon-180.png" sizes="180x180">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="Field Assistant">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
     html, body { background: #2A2B28; }
-    body { font-family: 'Hanken Grotesk', system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color: #16211F; }
-    a { color: #0C8577; text-decoration: none; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color: #16211F; }
+    a { color: #087568; text-decoration: none; }
     a:hover { color: #0A6E62; }
     input, select, textarea, button { font-family: inherit; }
-    input:focus, textarea:focus, select:focus { outline: none; border-color: #0C8577 !important; }
-    ::placeholder { color: #A8ADA6; }
+    input, select, textarea { font-size:16px !important; min-width:0; max-width:100%; }
+    button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible { outline:2px solid #0A6E62; outline-offset:2px; }
+    input:focus, textarea:focus, select:focus { border-color: #087568 !important; }
+    ::placeholder { color: #56635B; opacity:1; }
+    input[style*="#202E2A"]::placeholder, textarea[style*="#202E2A"]::placeholder { color:#BACBC2; }
+    input[style*="#202E2A"]:focus-visible, textarea[style*="#202E2A"]:focus-visible, select[style*="#202E2A"]:focus-visible { outline-color:#4FE0B5; }
     .scroll::-webkit-scrollbar { width: 0; height: 0; }
     @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
     @keyframes spin { to { transform: rotate(360deg); } }
@@ -44,10 +45,11 @@
       // unless unsaved field data (readings, programme entries, jar results) is on
       // screen: a forced reload would destroy it. The update then lands on the next
       // manual reload instead.
-      var __reloading = false;
+      var __reloading = false, __hadController = !!navigator.serviceWorker.controller;
       navigator.serviceWorker.addEventListener('controllerchange', function () {
+        if (!__hadController) { __hadController = true; return; } // First install already displays this release.
         if (__reloading) return;
-        try { if (window.FieldAssistant && window.FieldAssistant.hasUnsavedFieldData()) return; } catch (e) {}
+        try { if (window.FieldAssistant && window.FieldAssistant.hasUnsavedFieldData()) return; } catch (e) { return; }
         __reloading = true; window.location.reload();
       });
       window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
