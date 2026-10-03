@@ -124,7 +124,7 @@ window.PLAYBOOKS = {
         items: ['Capillary suction time', 'Gravity drainage', 'Filtrate turbidity', 'Floc resistance to shear', 'Cake solids', 'Solids capture', 'Centrate / filtrate quality', 'Polymer kg per dry tonne']
       }],
       doseBasis: {
-        label: 'kg active polymer / t dry solids',
+        label: 'kg as-supplied product / t dry solids',
         body: 'Report per dry tonne, never as mg/L of sludge — otherwise a change in feed solids masquerades as a change in polymer performance. The Dosing Calc sludge mode works in these units.'
       },
       progUnit: 'kgt',
@@ -212,9 +212,9 @@ window.PLAYBOOKS = {
         items: ['Initial interface settling rate', 'Overflow / supernatant turbidity', '% water recovered', 'Final sediment / underflow solids', 'Compacted bed height', 'CST or filtration rate', 'Yield stress (underflow handling)', 'Floc response to shear']
       }],
       doseBasis: {
-        label: 'g active polymer / t dry solids',
+        label: 'g as-supplied product / t dry solids',
         body: 'Dry-solids basis stops a change in slurry concentration masquerading as a dose change.',
-        formulas: ['m(dry solids) = m(slurry) × %solids ÷ 100', 'Dose (g/t) = active polymer (g) ÷ dry solids (t)']
+        formulas: ['m(dry solids) = m(slurry) × %solids ÷ 100', 'Dose (g/t) = as-supplied product (g) ÷ dry solids (t)']
       },
       progUnit: 'gt',
       cautions: [

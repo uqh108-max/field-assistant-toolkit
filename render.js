@@ -81,14 +81,14 @@
       };
     });
     var jarStockSteps = [];
-    if (jarProductChosen) {
-      var sp = parseFloat(s.stockPct);
+    if (jarProductChosen && isFinite(this.jarStockStrength())) {
+      var sp = this.jarStockStrength();
       var gPerL = isFinite(sp) ? this.fmt(sp * 10, 2) : '—';
-      var powder = jarProduct.form === 'Powder';
-      jarStockSteps.push('Weigh ' + gPerL + ' g of ' + jarProduct.name + ' for each 1 L of stock (' + gPerL + ' g/L = ' + gPerL + ' mg/mL).');
-      if (powder) jarStockSteps.push('Add the water first, then sprinkle the powder slowly into a well-stirred vortex — never tip it in as a lump, or you get gel "fish-eyes" that never dissolve.');
-      else jarStockSteps.push('Add the product into the stirred water (product to water, not the reverse) so it disperses evenly with no stringy gels.');
-      jarStockSteps.push('Mature ' + (jarProduct.ageing || '30–60 min') + ' with gentle stirring, then stop stirring before dosing — matured polymer is shear-sensitive. Make fresh each test day.');
+      var powder = /^powder\b/i.test(jarProduct.form || '');
+      jarStockSteps.push('Weigh ' + gPerL + ' g of ' + jarProduct.name + ' then top up to 1 L final volume of stock (' + gPerL + ' g/L = ' + gPerL + ' mg/mL).');
+      // Chemical-specific mixing, dilution compatibility and maturation are not
+      // established by a w/v arithmetic recipe. Never generalise polymer advice.
+      jarStockSteps.push('Follow the supplier instructions and SDS for this specific chemical, including dilution compatibility, mixing order, maturation (if applicable) and PPE. No universal polymer procedure is assumed.');
       jarStockSteps.push('1 mL of this stock added to a ' + (s.jarVol || '?') + ' mL jar ≈ ' + this.fmt(this.jarPpm('1'), 2) + ' mg/L dose.');
     }
 
@@ -97,7 +97,7 @@
       var win = s.winner === i;
       return {
         i: i, n: i + 1, dose: j.dose, ph: j.ph, turb: j.turb, floc: j.floc,
-        ppm: isFinite(ppm) ? self.fmt(ppm, 2) : '—',
+        ppm: isFinite(ppm) ? self.fmt(ppm, 2) : '—', finalPpm: self.fmt(self.jarFinalPpm(j.dose), 2),
         cardBg: win ? '#ECF7F3' : '#FFF',
         cardBorder: win ? '#0C8577' : '#E2DDD0',
         markColor: win ? '#0C8577' : '#B4BBB4',
@@ -143,21 +143,24 @@
       };
     });
 
-    var stockPctN = parseFloat(s.stockPct);
-    var stockPrep = isFinite(stockPctN)
-      ? 'To make this stock: dissolve ' + this.fmt(stockPctN * 10, 2) + ' g of product per 1 L of water (' + this.fmt(stockPctN * 10, 2) + ' g/L = ' + this.fmt(stockPctN * 10, 2) + ' mg/mL). Then 1 mL added to a ' + (s.jarVol || '?') + ' mL jar ≈ ' + this.fmt(this.jarPpm('1'), 2) + ' mg/L.'
+    var stockPctN = this.jarStockStrength();
+    var stockPrep = isFinite(stockPctN) && stockPctN > 0 && stockPctN <= 100
+      ? 'To make this stock: dissolve ' + this.fmt(stockPctN * 10, 2) + ' g of as-supplied product, then top up to 1 L final volume (' + this.fmt(stockPctN * 10, 2) + ' g/L = ' + this.fmt(stockPctN * 10, 2) + ' mg/mL). Then 1 mL added to a ' + (s.jarVol || '?') + ' mL jar ≈ ' + this.fmt(this.jarPpm('1'), 2) + ' mg/L.'
       : 'Enter a stock strength to see the make-up quantity.';
 
     var cpFu = App.flowLabel(s.flowUnit);
     var cpSu = App.flowLabel(s.sludgeFlowUnit);
     var calc = this.computeCalc();
-    var calMl = parseFloat(s.calMl), calSec = parseFloat(s.calSec);
-    var calActual = (isFinite(calMl) && isFinite(calSec) && calSec > 0) ? calMl * 3.6 / calSec : NaN;
+    var calMl = this.parseNum(s.calMl), calSec = this.parseNum(s.calSec);
+    var calActual = (calMl > 0 && calSec > 0) ? this.finiteResult(calMl * 3.6 / calSec, true) : NaN;
     var calTarget = calc.solLhNum;
     var calDev = NaN, calFactor = NaN;
-    if (isFinite(calActual) && isFinite(calTarget) && calActual > 0) {
-      calDev = (calActual - calTarget) / calTarget * 100;
-      calFactor = calTarget / calActual;
+    if (isFinite(calActual) && calTarget > 0 && calActual > 0) {
+      calDev = this.finiteResult((calActual - calTarget) / calTarget * 100);
+      calFactor = this.finiteResult(calTarget / calActual, true);
+      // Both the dimensionless correction and its percentage must be
+      // representable; an unavailable deviation cannot authorize advice.
+      if (!isFinite(calDev) || !isFinite(this.finiteResult(calFactor * 100, true))) calFactor = NaN;
     }
     var calInTol = isFinite(calDev) && Math.abs(calDev) <= 5;
     var cal = {
@@ -175,8 +178,8 @@
     var calcPumpObj = allPumps.find(function (x) { return x.id === s.selectedCalcPumpId; });
     var calcPumpInfo = '';
     if (calcPumpObj) {
-      var pv = this.parsePumpFlow(calcPumpObj.maxFlow);
-      calcPumpInfo = calcPumpObj.model + ' — rated ' + calcPumpObj.maxFlow + (calcPumpObj.maxPress ? ' · ' + calcPumpObj.maxPress : '') + '. Using ' + (isFinite(pv) ? this.fmt(pv, 2) : '?') + ' L/h as max capacity.';
+      var pv = this.pumpCapacityOf(calcPumpObj);
+      calcPumpInfo = (!isFinite(pv) ? 'Operating capacity not confirmed — no stroke advice. Verify the exact model, frequency and back-pressure, then enter a confirmed manual capacity. ' : '') + calcPumpObj.model + ' — rated ' + calcPumpObj.maxFlow + (calcPumpObj.maxPress ? ' · ' + calcPumpObj.maxPress : '') + '. Using ' + (isFinite(pv) ? this.fmt(pv, 2) : '?') + ' L/h as max capacity.';
     }
 
     var clientPreview = 'Will store: ' + (s.calcMode === 'sludge'
@@ -230,15 +233,15 @@
       jarProductPickerOpen: s.jarProductPickerOpen, jarProductPickerQuery: s.jarProductPickerQuery,
       selectedJarProductLabel: (allProducts.find(function (p) { return p.id === s.jarProductId; }) || {}).name || '— select a product —',
       filteredJarProducts: s.jarProductPickerOpen ? filterProducts(allProducts, s.jarProductPickerQuery) : [],
-      showFlowConv: s.flowUnit !== 'm3h' && isFinite(parseFloat(s.flow)),
-      flowConverted: this.fmt(parseFloat(s.flow) * this.flowFactor(s.flowUnit), 3),
-      showSludgeConv: s.sludgeFlowUnit !== 'm3h' && isFinite(parseFloat(s.sludgeFlow)),
-      sludgeConverted: this.fmt(parseFloat(s.sludgeFlow) * this.flowFactor(s.sludgeFlowUnit), 3),
+      showFlowConv: s.flowUnit !== 'm3h' && isFinite(this.parseNum(s.flow)),
+      flowConverted: this.fmt(this.parseNum(s.flow) * this.flowFactor(s.flowUnit), 3),
+      showSludgeConv: s.sludgeFlowUnit !== 'm3h' && isFinite(this.parseNum(s.sludgeFlow)),
+      sludgeConverted: this.fmt(this.parseNum(s.sludgeFlow) * this.flowFactor(s.sludgeFlowUnit), 3),
       clientPreview: clientPreview,
       jarTestRows: s.jarTests.map(function (t) {
         return {
           id: t.id, date: t.date, who: t.clientName ? t.clientName : 'No client', product: t.productName,
-          winner: (t.winnerN ? ('Jar ' + t.winnerN + ' · ') : '') + t.winnerPpm + ' mg/L',
+          winner: (t.winnerN ? ('Jar ' + t.winnerN + ' · ') : '') + (t.doseConvention === 'final-concentration-only-v1' ? t.winnerFinalMgL : t.winnerPpm) + ' mg/L' + (t.doseConvention === 'nominal-raw-sample-v1' ? ' nominal raw-sample dose' : (t.doseConvention === 'final-concentration-only-v1' ? ' final concentration (no raw-dose handoff)' : ' (historical convention; not reinterpreted)')),
           setup: t.jarVol + ' mL jar · ' + t.stockPct + '% stock', note: t.note || ''
         };
       }),
@@ -264,6 +267,7 @@
   // `w` is a doseWindowFor result, or {mismatch:true, name, rawUnit, note}.
   function doseWindowBanner(w, subject) {
     if (!w) return '';
+    if (w.abstain) return '<div role="status" style="margin-top:10px;padding:12px;border:1px dashed #D8D2C4;border-radius:10px;"><b>Window not checked — no dosing recommendation.</b> ' + esc(w.reason) + ' Recorded range: ' + esc(w.raw) + '; unit: ' + esc(w.rawUnit) + '. ' + esc(w.note) + '</div>';
     var noteLine = w.note ? '<div style="margin-top:6px;font-size:11px;opacity:.8;line-height:1.45;">Datasheet basis: ' + esc(w.note) + '</div>' : '';
     if (w.mismatch) {
       return '<div style="margin-top:10px;background:#FBF9F4;border:1px dashed #D8D2C4;border-radius:10px;padding:9px 12px;font-size:11.5px;color:#94A099;line-height:1.5;">' +
@@ -409,6 +413,7 @@
     return '<div style="margin-top:12px;background:#16211F;border-radius:16px;padding:16px;color:#EFECE3;">' +
       '<div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:#6E8A82;font-weight:700;margin-bottom:12px;">New product</div>' +
       '<div style="display:flex;flex-direction:column;gap:9px;">' +
+        (s.productSaveError ? '<div role="alert" style="color:#FF8A6B;">' + esc(s.productSaveError) + '</div>' : '') +
         fld('name', np.name, 'Product name (required)', 'width:100%;background:#202E2A;border:1px solid #35453F;border-radius:10px;padding:11px;font-size:14px;font-weight:600;color:#FFF;') +
         fld('brand', np.brand, 'Brand / supplier') +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;">' +
@@ -416,6 +421,7 @@
           '<select data-actchange="onNpField" data-f="form" data-key="np-form" style="background:#202E2A;border:1px solid #35453F;border-radius:10px;padding:11px;font-size:13.5px;color:#FFF;appearance:none;">' + optionTags([{ v: 'Powder' }, { v: 'Liquid' }, { v: 'Emulsion' }], np.form, 'v', 'v') + '</select>' +
         '</div>' +
         fld('charge', np.charge, 'Charge (e.g. Cationic high)') +
+        '<label>Range chemical basis <select data-actchange="onNpField" data-f="doseMassBasis" data-key="np-doseMassBasis">' + optionTags([{v:'unknown',label:'Unknown / active / reference formulation — no comparison'},{v:'as-supplied',label:'I confirm this range is mass of as-supplied product'}], np.doseMassBasis || 'unknown', 'v', 'label') + '</select></label>' +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;">' +
           fld('doseRange', np.doseRange, 'Dose range e.g. 1 – 10', 'background:#202E2A;border:1px solid #35453F;border-radius:10px;padding:11px;font-size:13.5px;color:#EFECE3;') +
           '<select data-actchange="onNpField" data-f="doseUnit" data-key="np-doseUnit" style="background:#202E2A;border:1px solid #35453F;border-radius:10px;padding:11px;font-size:12.5px;color:#FFF;appearance:none;">' + optionTags([{ v: 'mg/L on flow' }, { v: 'kg / t dry solids' }, { v: 'g / t dry solids' }], np.doseUnit, 'v', 'v') + '</select>' +
@@ -475,7 +481,7 @@
     var s = App.state;
     var productOpts = '<option value="">— none / generic —</option>' + v.allProducts.map(function (p) { return '<option value="' + esc(p.id) + '"' + (p.id === s.calcProductId ? ' selected' : '') + '>' + esc(p.name) + '</option>'; }).join('');
     var flowUnitSel = function (setKey, cur) {
-      return '<select data-set="' + setKey + '" data-key="' + setKey + '" style="border:none;border-left:1px solid #E2DDD0;background:#F6F3EC;padding:0 30px 0 13px;font-size:13.5px;font-weight:700;color:#4B564F;appearance:none;cursor:pointer;background-image:' + DOWNARROW + ';background-repeat:no-repeat;background-position:right 11px center;">' + optionTags(App.FLOW_UNITS, cur, 'v', 'label') + '</select>';
+      return '<select data-set="' + setKey + '" data-key="' + setKey + '" style="border:none;border-left:1px solid #E2DDD0;background:#F6F3EC;padding:0 30px 0 13px;font-size:13.5px;font-weight:700;color:#4B564F;appearance:none;cursor:pointer;background-image:' + DOWNARROW + ';background-repeat:no-repeat;background-position:right 11px center;">' + (!isFinite(App.flowFactor(cur)) ? '<option value="" selected>Confirm unit</option>' : '') + optionTags(App.FLOW_UNITS, cur, 'v', 'label') + '</select>';
     };
     var concInputs = v.isConcMode !== undefined ? '' : '';
     var isConc = s.calcMode === 'conc';
@@ -549,9 +555,11 @@
           items: v.filteredProducts.map(function (p) { return { id: p.id, label: p.name, sub: p.subtitle, tag: p.tag, tint: p.tint, tintText: p.tintText, selected: p.id === s.calcProductId }; })
         }) + '</div>' +
       concBlock + sludgeBlock +
+      (s.calcHandoffNote ? '<div role="alert">' + esc(s.calcHandoffNote) + '</div>' : '') +
       doseWindowBanner(v.doseWin, v.doseWin && v.doseWin.mismatch ? 'The ' + (isConc ? 'mg/L' : 'kg/t DS') + ' entry' : 'The entered dose') +
       '<div style="margin-top:14px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
-        '<div style="font-size:12.5px;font-weight:700;color:#4B564F;margin-bottom:10px;">Make-down solution</div>' +
+        '<div style="font-size:12.5px;font-weight:700;color:#4B564F;margin-bottom:10px;">Feed preparation</div>' +
+        '<label>Feed basis <select data-set="feedBasis" data-key="feedBasis"><option value="solution"' + (s.feedBasis !== 'neat' ? ' selected' : '') + '>Made-up solution (% w/v product)</option><option value="neat"' + (s.feedBasis === 'neat' ? ' selected' : '') + '>Neat liquid (use product density)</option></select></label>' +
         '<div style="display:flex;background:#EEEAE1;border-radius:10px;padding:3px;gap:3px;margin-bottom:11px;">' +
           '<button data-act="onFormLiquid" style="' + v.formLiquidStyle + '">Liquid / emulsion</button>' +
           '<button data-act="onFormPowder" style="' + v.formPowderStyle + '">Powder</button></div>' +
@@ -560,7 +568,7 @@
             '<div style="position:relative;"><input inputmode="decimal" data-set="makedown" data-key="makedown" value="' + esc(s.makedown) + '" placeholder="0.5" style="width:100%;background:#FBF9F4;border:1px solid #D8D2C4;border-radius:10px;padding:11px 34px 11px 11px;font-size:15px;font-family:\'IBM Plex Mono\';font-weight:600;"><span style="position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:12px;color:#94A099;font-weight:600;">%</span></div></div>' +
           liquidDensity +
         '</div>' +
-        '<div style="margin-top:8px;font-size:11px;color:#94A099;line-height:1.4;">Solution strength is % w/v (g product per 100 mL). Powder dose is on an as-supplied basis.</div>' +
+        '<div style="margin-top:8px;font-size:11px;color:#94A099;line-height:1.4;">Solution strength is % w/v (g product per 100 mL). All doses and stock strengths are mass of as-supplied product, NOT active ingredient. 100% w/v means 1000 g/L, not neat product.</div>' +
       '</div>' +
       '<div style="margin-top:12px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
         '<div style="font-size:12.5px;font-weight:700;color:#4B564F;margin-bottom:10px;">Dosing pump</div>' +
@@ -571,7 +579,7 @@
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;"><div style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#6E8A82;font-weight:700;">Results</div><div style="width:8px;height:8px;border-radius:50%;background:' + c.statusDot + ';"></div></div>' +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px 12px;">' +
           resCell('Neat product', c.massKgH, '#4FE0B5', 'kg/h &nbsp;·&nbsp; ' + esc(c.massKgDay) + ' kg/day') +
-          resCell('Solution feed', c.solLh, '#4FE0B5', 'L/h of ' + esc(s.makedown) + '% solution') +
+          resCell('Pump feed', c.solLh, '#4FE0B5', s.feedBasis === 'neat' ? 'L/h neat as-supplied product' : 'L/h of ' + esc(s.makedown) + '% w/v solution') +
           resCell('Pump stroke', c.strokePct, c.strokeColor, '% of max capacity') +
           resCell('Neat volume', c.neatLh, '#4FE0B5', 'L/h before dilution') +
         '</div>' +
@@ -579,7 +587,7 @@
           rowKV('Suggested stroke length', c.strokeLen, '#4FE0B5') +
           rowKV('Suggested stroke rate / speed', c.strokeRate, '#4FE0B5') +
           rowKV('Dilution ratio', c.dilution, '#EFECE3') +
-          rowKV('Batch (1000 L tank)', c.batchKg + ' kg powder', '#EFECE3') +
+          rowKV('Batch (1000 L tank)', c.batchKg + ' kg product', '#EFECE3') +
           rowKV('1000 L batch lasts', c.batchHours + ' h', '#EFECE3') +
         '</div></div>' +
       warnHtml +
@@ -597,7 +605,8 @@
     return '<div style="margin-top:16px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
       '<div style="display:flex;align-items:center;gap:7px;margin-bottom:4px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0C8577" stroke-width="2"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><circle cx="12" cy="12" r="3.2"/></svg>' +
       '<div style="font-size:12.5px;font-weight:700;color:#4B564F;">Field calibration check</div></div>' +
-      '<div style="font-size:12px;color:#6B776F;line-height:1.5;margin-bottom:11px;">Divert the pump into a measuring cylinder for a fixed time, then enter what you collected to confirm it matches the target feed.</div>' +
+      '<div style="font-size:12px;color:#6B776F;line-height:1.5;margin-bottom:11px;">Measure delivery under the actual operating back-pressure (e.g. a suitable suction-side calibration column), following site procedures. An open-discharge catch test does not confirm operating-pressure capacity.</div>' +
+      ((s.calMl || s.calSec) && cal.actual === '—' ? '<div role="alert">Invalid catch measurement: enter positive mL and seconds using a decimal point, no commas or grouping. No adjustment advice shown.</div>' : '') +
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">' +
         '<div><div style="font-size:11.5px;font-weight:600;color:#6B776F;margin-bottom:4px;">Volume collected</div><div style="position:relative;"><input inputmode="decimal" data-set="calMl" data-key="calMl" value="' + esc(s.calMl) + '" placeholder="0" style="width:100%;background:#FBF9F4;border:1px solid #D8D2C4;border-radius:10px;padding:11px 40px 11px 11px;font-size:15px;font-family:\'IBM Plex Mono\';font-weight:600;"><span style="position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:12px;color:#94A099;font-weight:600;">mL</span></div></div>' +
         '<div><div style="font-size:11.5px;font-weight:600;color:#6B776F;margin-bottom:4px;">Over</div><div style="position:relative;"><input inputmode="decimal" data-set="calSec" data-key="calSec" value="' + esc(s.calSec) + '" placeholder="0" style="width:100%;background:#FBF9F4;border:1px solid #D8D2C4;border-radius:10px;padding:11px 34px 11px 11px;font-size:15px;font-family:\'IBM Plex Mono\';font-weight:600;"><span style="position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:12px;color:#94A099;font-weight:600;">s</span></div></div>' +
@@ -629,16 +638,17 @@
         '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">' +
           '<button data-act="setWinner" data-i="' + j.i + '" style="border:none;background:none;cursor:pointer;padding:0;display:flex;"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="' + j.markColor + '" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="' + j.markFill + '" fill="' + j.markColor + '" stroke="none"/></svg></button>' +
           '<div style="font-size:14.5px;font-weight:700;">Jar ' + j.n + '</div>' +
-          '<div style="margin-left:auto;text-align:right;"><span style="font-family:\'IBM Plex Mono\';font-size:16px;font-weight:600;color:#0C8577;">' + esc(j.ppm) + '</span><span style="font-size:11px;color:#94A099;font-weight:600;"> mg/L</span></div></div>' +
+          '<div style="margin-left:auto;text-align:right;"><span style="font-family:\'IBM Plex Mono\';font-size:16px;font-weight:600;color:#0C8577;">' + esc(j.ppm) + '</span><span style="font-size:11px;color:#94A099;font-weight:600;"> mg/L nominal (raw sample)</span></div></div>' +
+        '<div style="font-size:12px;margin-bottom:8px;">Final mixed concentration: ' + esc(j.finalPpm) + ' mg/L (additive volumes). In final-total mode the raw sample volume is unknown, so full-scale handoff is blocked.</div>' +
         '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:7px;">' + cell('Dose mL', 'dose', j.dose) + cell('pH', 'ph', j.ph) + cell('NTU', 'turb', j.turb) + cell('Floc', 'floc', j.floc, '—') + '</div></div>';
     }).join('');
     // A jar mg/L is only a full-scale dose when the product doses mg/L on flow.
     // Dry-tonne-basis products (g/t · kg/t DS) get an explanation, not a send
     // button — there is no conversion without the plant's solids balance.
-    var jarBasisMgL = !s.jarProductId || App.doseBasisOf(v.jarProduct) === 'mgL';
+    var jarBasisMgL = s.jarVolumeBasis === 'initial' && (!s.jarProductId || App.doseBasisOf(v.jarProduct) === 'mgL');
     var winnerHtml = v.hasWinner ? '<div style="margin-top:15px;background:#16211F;border-radius:16px;padding:16px 17px;color:#EFECE3;">' +
       '<div style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#6E8A82;font-weight:700;">Selected optimum — Jar ' + esc(v.winnerN) + '</div>' +
-      '<div style="display:flex;align-items:baseline;gap:8px;margin-top:5px;"><div style="font-family:\'IBM Plex Mono\';font-size:30px;font-weight:600;color:#4FE0B5;">' + esc(v.winnerPpm) + '</div><div style="font-size:13px;color:#9FB0AA;">' + (jarBasisMgL ? 'mg/L equivalent full-scale dose' : 'mg/L in the jar') + '</div></div>' +
+      '<div style="display:flex;align-items:baseline;gap:8px;margin-top:5px;"><div style="font-family:\'IBM Plex Mono\';font-size:30px;font-weight:600;color:#4FE0B5;">' + esc(v.winnerPpm) + '</div><div style="font-size:13px;color:#9FB0AA;">' + (jarBasisMgL ? 'mg/L nominal dose per initial raw sample' : 'mg/L in the jar') + '</div></div>' +
       (jarBasisMgL
         ? '<button data-act="useWinner" style="margin-top:12px;width:100%;border:none;cursor:pointer;background:#0C8577;color:#FFF;border-radius:12px;padding:13px;font-size:14.5px;font-weight:700;">Send this dose to the calculator →</button>'
         : '<div style="margin-top:12px;background:#202E2A;border:1px solid #35453F;border-radius:10px;padding:10px 12px;font-size:12px;color:#DCE6E1;line-height:1.5;"><b>' + esc(v.jarProduct.name) + '</b> doses per tonne of dry solids at full scale (' + esc(v.jarProduct.doseUnit || '') + ') — a jar mg/L doesn’t convert to a plant dose without the solids balance. Use the sludge / mining playbook’s dry-solids tools instead.</div>') +
@@ -675,8 +685,10 @@
         }) + stockBlock + '</div>' +
       '<div style="margin-top:12px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
         '<div style="font-size:12.5px;font-weight:700;color:#4B564F;margin-bottom:10px;">Test setup</div>' +
+        '<label>Jar volume basis <select data-set="jarVolumeBasis" data-key="jarVolumeBasis">' + optionTags([{v:'final',label:'Final total incl. stock (raw sample unknown; handoff blocked)'},{v:'initial',label:'Initial RAW sample before adding stock (nominal dose)'}], s.jarVolumeBasis, 'v', 'label') + '</select></label>' +
+        '<div style="font-size:12px;line-height:1.5;">Stock is % w/v as-supplied product, not active ingredient. Use plain non-negative decimal numbers with a decimal point; commas, grouping and ranges are invalid. Invalid setups show — and cannot be sent. Follow supplier-specific mixing and safety instructions.</div>' +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">' +
-          '<div><div style="font-size:11.5px;font-weight:600;color:#6B776F;margin-bottom:4px;">Jar volume</div><div style="position:relative;"><input inputmode="decimal" data-set="jarVol" data-key="jarVol" value="' + esc(s.jarVol) + '" style="width:100%;background:#FBF9F4;border:1px solid #D8D2C4;border-radius:10px;padding:11px 40px 11px 11px;font-size:15px;font-family:\'IBM Plex Mono\';font-weight:600;"><span style="position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:12px;color:#94A099;font-weight:600;">mL</span></div></div>' +
+          '<div><div style="font-size:11.5px;font-weight:600;color:#6B776F;margin-bottom:4px;">Jar volume (see basis below)</div><div style="position:relative;"><input inputmode="decimal" data-set="jarVol" data-key="jarVol" value="' + esc(s.jarVol) + '" style="width:100%;background:#FBF9F4;border:1px solid #D8D2C4;border-radius:10px;padding:11px 40px 11px 11px;font-size:15px;font-family:\'IBM Plex Mono\';font-weight:600;"><span style="position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:12px;color:#94A099;font-weight:600;">mL</span></div></div>' +
           '<div><div style="font-size:11.5px;font-weight:600;color:#6B776F;margin-bottom:4px;">Stock strength</div><div style="position:relative;"><input inputmode="decimal" data-set="stockPct" data-key="stockPct" value="' + esc(s.stockPct) + '" style="width:100%;background:#FBF9F4;border:1px solid #D8D2C4;border-radius:10px;padding:11px 32px 11px 11px;font-size:15px;font-family:\'IBM Plex Mono\';font-weight:600;"><span style="position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:12px;color:#94A099;font-weight:600;">%</span></div></div>' +
         '</div>' +
         '<div style="margin-top:10px;background:#ECF7F3;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#17564C;line-height:1.5;">' + esc(v.stockPrep) + '</div>' +
@@ -925,10 +937,10 @@
         '</div>' +
         '<div style="margin-top:12px;background:#16211F;border-radius:12px;padding:13px 14px;color:#EFECE3;display:flex;gap:18px;">' +
           '<div><div style="font-size:10.5px;color:#6E8A82;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;">Dry solids</div><div style="font-size:16px;font-weight:600;font-family:\'IBM Plex Mono\';color:#EFECE3;">' + esc(b.dryG) + ' g</div></div>' +
-          '<div><div style="font-size:10.5px;color:#6E8A82;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;">Active polymer</div><div style="font-size:16px;font-weight:600;font-family:\'IBM Plex Mono\';color:#EFECE3;">' + esc(b.activeMg) + ' mg</div></div>' +
+          '<div><div style="font-size:10.5px;color:#6E8A82;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;">As-supplied product</div><div style="font-size:16px;font-weight:600;font-family:\'IBM Plex Mono\';color:#EFECE3;">' + esc(b.activeMg) + ' mg</div></div>' +
           '<div><div style="font-size:10.5px;color:#6E8A82;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;">Dose</div><div style="font-size:16px;font-weight:600;font-family:\'IBM Plex Mono\';color:#4FE0B5;">' + esc(b.doseGt) + ' g/t</div></div>' +
         '</div>' +
-        '<div style="margin-top:8px;font-size:11px;color:#94A099;line-height:1.45;">Stock at 0.1% w/v = 1 mg active per mL. Dose basis is dry solids, so the answer is comparable across slurry concentrations.</div></div>';
+        '<div style="margin-top:8px;font-size:11px;color:#94A099;line-height:1.45;">Stock at 0.1% w/v = 1 mg as-supplied product per mL. Dose basis is dry solids, so the answer is comparable across slurry concentrations.</div></div>';
     }
 
     // Site readings — every playbook. Values come from the plant visit and can
@@ -1003,7 +1015,7 @@
         (prog.canRetest ? '' : '<div style="margin-top:6px;font-size:10.5px;color:#94A099;">Retest bracketing works on mg/L doses (jar tests dose on flow).</div>');
       progHtml = '<div style="margin-top:12px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
         '<div style="font-size:12.5px;font-weight:700;color:#4B564F;">Current dosing programme</div>' +
-        '<div style="font-size:12px;color:#6B776F;line-height:1.5;margin:4px 0 11px;">What the plant runs today — their product, rate and flow. Saves with the readings; checks the rate against the datasheet window.</div>' +
+        '<div style="font-size:12px;color:#6B776F;line-height:1.5;margin:4px 0 11px;">What the plant runs today — their product, rate and flow. Saves with the readings; only checks a dose window when its chemical basis, units and context are confirmed. Enter as-supplied product mass only; active-ingredient rates must be converted externally using a verified active fraction, otherwise do not send or retest.</div>' +
         comboHtml({
           name: 'guideProduct', open: v.guideProgPickerOpen, query: v.guideProgPickerQuery, setKey: 'guideProgPickerQuery',
           toggleAct: 'toggleGuideProgPicker', pickAct: 'pickGuideProgProduct',
@@ -1013,7 +1025,8 @@
         }) +
         '<div style="margin-top:6px;font-size:10.5px;color:#94A099;line-height:1.4;">Product not listed? Add it under Products → “Add your own product”, then pick it here.</div>' +
         '<div style="margin-top:10px;display:flex;flex-direction:column;gap:10px;">' +
-          '<div><div style="font-size:11.5px;font-weight:600;color:#6B776F;margin-bottom:4px;">Current dose rate</div>' +
+          '<div><div style="font-size:11.5px;font-weight:600;color:#6B776F;margin-bottom:4px;">Current dose rate (as-supplied product)</div>' +
+            '<label>Chemical mass basis <select data-actchange="onGuideProgSelect" data-f="guideProgMassBasis" data-key="guideProgMassBasis">' + optionTags([{v:'unknown',label:'Unknown — no dose transfer'},{v:'active',label:'Active ingredient — conversion not available'},{v:'as-supplied',label:'Confirmed as-supplied product mass'}], s.guideProgMassBasis, 'v', 'label') + '</select></label>' +
             '<div style="display:flex;border:1px solid #D8D2C4;border-radius:10px;background:#FBF9F4;overflow:hidden;"><input inputmode="decimal" data-actinput="onGuideProgField" data-f="guideProgDose" data-key="guideProgDose" value="' + esc(s.guideProgDose) + '" placeholder="—" style="flex:1;min-width:0;border:none;background:transparent;padding:11px;font-size:15px;font-family:\'IBM Plex Mono\';font-weight:600;">' + unitSel + '</div></div>' +
           '<div><div style="font-size:11.5px;font-weight:600;color:#6B776F;margin-bottom:4px;">Plant / feed flow</div>' +
             '<div style="display:flex;border:1px solid #D8D2C4;border-radius:10px;background:#FBF9F4;overflow:hidden;"><input inputmode="decimal" data-actinput="onGuideProgField" data-f="guideProgFlow" data-key="guideProgFlow" value="' + esc(s.guideProgFlow) + '" placeholder="—" style="flex:1;min-width:0;border:none;background:transparent;padding:11px;font-size:15px;font-family:\'IBM Plex Mono\';font-weight:600;">' + flowSel + '</div></div>' +
@@ -1031,6 +1044,7 @@
       tdiHtml = '<div style="margin-top:12px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
         '<div style="display:flex;align-items:center;gap:7px;"><div style="font-size:12.5px;font-weight:700;color:#4B564F;">Demand snapshot (TDI)</div>' + vbadge('example') + '</div>' +
         '<div style="font-size:12px;color:#6B776F;line-height:1.5;margin-top:4px;">Reads the site readings above and flags where the chemical demand is coming from. Band thresholds are illustrative demo values; calibrate against your own jar-test history before relying on them.</div>' +
+        (tdi.invalid ? '<div role="alert">Invalid reading: use a plain non-negative decimal with a decimal point, no commas or grouping. Invalid readings are not banded.</div>' : '') +
         (tdi.hasAny ? '<div style="margin-top:11px;display:flex;flex-direction:column;gap:7px;">' + flagRows + '</div>' : '<div style="margin-top:11px;background:#FBF9F4;border:1px dashed #D8D2C4;border-radius:10px;padding:11px 12px;font-size:12px;color:#94A099;text-align:center;">Enter turbidity, UV254, alkalinity or pH above to see the flags.</div>') +
         (tdi.summary ? '<div style="margin-top:9px;background:#16211F;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#DCE6E1;line-height:1.5;">' + esc(tdi.summary) + '</div>' : '') + '</div>';
     }
@@ -1086,11 +1100,12 @@
       var el = e.target;
       if (el.tagName === 'SELECT') return;
       if (el.dataset.set != null) {
-        self.state[el.dataset.set] = el.value;
+        var key = el.dataset.set, patch = {}; patch[key] = el.value;
+        if (['jarVol', 'stockPct', 'jarVolumeBasis'].indexOf(key) >= 0) { self.editJarSetup(patch); return; }
         // search boxes update only their own option list — no full-screen re-render (smooth typing)
         var comboName = { productPickerQuery: 'product', calcPumpPickerQuery: 'pump', jarProductPickerQuery: 'jarProduct', guideProgPickerQuery: 'guideProduct' }[el.dataset.set];
-        if (comboName) self.updateComboList(comboName);
-        else self.render();
+        if (comboName) { self.state[key] = el.value; self.updateComboList(comboName); }
+        else self.setState(patch);
       }
       else if (el.dataset.actinput) { var fn = App.H[el.dataset.actinput]; if (fn) fn(el, e); }
     });
@@ -1116,7 +1131,7 @@
     }
     this.render();
   };
-  App.setState_change = function (key, val) { var p = {}; p[key] = val; this.setState(p); };
+  App.setState_change = function (key, val) { var p = {}; p[key] = val; if (['jarVol', 'stockPct', 'jarVolumeBasis'].indexOf(key) >= 0) this.editJarSetup(p); else this.setState(p); };
 
   // Rebuild only the open combobox's option list as the user types (keeps the
   // search input, its caret, and the rest of the screen perfectly still).

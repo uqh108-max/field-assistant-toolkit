@@ -15,7 +15,7 @@
  * while the site is down) must never overwrite a working app file — v15 did
  * exactly that and left installed phones showing a 404 even offline.
  */
-var BUILD = '1c1f69370e63';
+var BUILD = 'e3ec54285fe2';
 var CACHE = 'field-assistant-v16-' + BUILD;
 var PREFIX = 'field-assistant-';
 var CORE = [

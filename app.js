@@ -24,6 +24,11 @@
   }
 
   var DATA = window.APP_DATA || { products: [], pumps: [] };
+  // Capture shipped material tuples before restored records can enter the library.
+  // Identity plus unchanged contents, never an imported verification label, is trust.
+  var catalogueMaterials = DATA.products.map(function (p) {
+    return { product: p, id: p.id, form: p.form, density: p.density, text: p.densityText };
+  });
 
   var App = {
     state: {
@@ -35,12 +40,12 @@
       flow: '50', dose: '',
       flowUnit: 'm3h', sludgeFlowUnit: 'm3h',
       sludgeFlow: '12', ds: '2.5', doseKg: '6', sludgeDensity: '1.0',
-      makedown: '0.5', density: '1.0', pumpMax: '20',
+      makedown: '0.5', density: '1.0', pumpMax: '20', feedBasis: 'solution',
       pumpSource: 'manual', selectedCalcPumpId: '',
       productPickerOpen: false, productPickerQuery: '',
       calcPumpPickerOpen: false, calcPumpPickerQuery: '',
       jarProductPickerOpen: false, jarProductPickerQuery: '',
-      jarVol: '1000', stockPct: '0.1', jarProductId: '',
+      jarVol: '1000', stockPct: '0.1', jarProductId: '', jarVolumeBasis: 'initial',
       productQuery: '', productFilter: 'all',
       jars: [
         { dose: '1', ph: '', turb: '', floc: '' },
@@ -65,7 +70,7 @@
       guideId: null, guideChecks: {},
       guideReadings: {}, guideSaveClient: '', guideSaveName: '', guideSaved: false, guideSaveError: '',
       guideProgProductId: '', guideProgPickerOpen: false, guideProgPickerQuery: '',
-      guideProgDose: '', guideProgDoseUnit: 'mgL', guideProgFlow: '', guideProgFlowUnit: 'm3h',
+      guideProgDose: '', guideProgMassBasis: 'unknown', guideProgDoseUnit: 'mgL', guideProgFlow: '', guideProgFlowUnit: 'm3h',
       guideProgFor: '', guideProgByPb: {},
       jarCurrentDose: '', bracketNote: '',
       mgSample: '500', mgSolids: '30', mgStock: '0.1', mgMl: '',
@@ -259,7 +264,7 @@
     persistTests: function (t) { try { localStorage.setItem('ctf_jartests_v1', JSON.stringify(t)); return true; } catch (e) { return false; } },
 
     // ---- maths (verbatim port) ---------------------------------------------
-    flowFactor: function (u) { var f = this.FLOW_UNITS.find(function (x) { return x.v === u; }); return f ? f.k : 1; },
+    flowFactor: function (u) { var f = this.FLOW_UNITS.find(function (x) { return x.v === u; }); return f ? f.k : NaN; },
     flowLabel: function (u) { var f = this.FLOW_UNITS.find(function (x) { return x.v === u; }); return f ? f.label : 'm³/h'; },
     // Unknown codes label as themselves — a silent fallback label would relabel
     // a saved dose under the wrong unit.
@@ -268,77 +273,188 @@
     // parseFloat's prefix parsing turns '1,000' into 1 and '5-10' into 5 — a
     // three-orders-of-magnitude dosing error that looks valid on screen.
     parseNum: function (str) {
+      // Actual internal numbers are not user-entered exponent strings.
+      if (typeof str === 'number') return isFinite(str) && str >= 0 ? str : NaN;
       var t = String(str == null ? '' : str).trim();
-      return /^\d*\.?\d+$/.test(t) ? parseFloat(t) : NaN;
+      var n = /^\d*\.?\d+$/.test(t) ? Number(t) : NaN;
+      return isFinite(n) && !(n === 0 && /[1-9]/.test(t)) ? n : NaN;
     },
     parsePumpFlow: function (str) {
-      if (!str) return NaN;
-      var m = String(str).match(/([\d.,]+)\s*(ml\/min|l\/min|l\/s|l\/h|gpd|gph)?/i);
+      // Full-string dimensional parse. Bare gallons and capacity annotations
+      // spanning different models/pressures cannot establish a safe capacity.
+      var t = String(str == null ? '' : str).trim().toLowerCase().replace(/³/g, '3');
+      var number = '(?:\\d+(?:\\.\\d+)?|\\.\\d+|\\d+,\\d{1,2})';
+      var m = t.match(new RegExp('^(' + number + ')(?:\\s*[-–—]\\s*(' + number + '))?\\s*(ml/h|ml/min|l/h|l/min|l/s|m3/h|us\\s*gal/h|imp\\s*gal/h|usgph|usgpd)$'));
       if (!m) return NaN;
-      var n = parseFloat(m[1].replace(/,/g, ''));
-      if (!isFinite(n)) return NaN;
-      var u = (m[2] || 'l/h').toLowerCase();
-      var k = { 'ml/min': 0.06, 'l/min': 60, 'l/s': 3600, 'l/h': 1, 'gpd': 3.785 / 24, 'gph': 3.785 }[u] || 1;
-      return n * k;
+      var lo = this.parseNum(m[1].replace(',', '.'));
+      var hi = m[2] ? this.parseNum(m[2].replace(',', '.')) : lo;
+      if (!(lo >= 0 && hi > 0 && hi >= lo)) return NaN;
+      var u = m[3].replace(/\s/g, '');
+      var k = { 'ml/h': 0.001, 'ml/min': 0.06, 'l/min': 60, 'l/s': 3600, 'l/h': 1, 'm3/h': 1000, 'usgal/h': 3.785411784, 'impgal/h': 4.54609, 'usgph': 3.785411784, 'usgpd': 3.785411784 / 24 }[u];
+      var capacity = hi * k;
+      return isFinite(capacity) && capacity > 0 ? capacity : NaN;
+    },
+    // Audit: family headlines, frequency-specific ratings and motive-water
+    // flow do not establish an injection capacity at the operating duty.
+    UNCONFIRMED_PUMPS: 'pk18roytronics pk19seriesaafa pk20seriesaa9m pk21seriesbfam pk22seriescfam pk23seriespfam pk24seriese7ex pk25seriesgmac pk26seriesgmod pk27roytronice pk28priusprius pk34memdoslasi pk35magdoslbsi pk48extronicty pk49betabbt5b0 pk57pulsatrons pk75qdoshflo pkgdme_s pkgdme_l pkgdmx pkprdelta pkprvario pk32d9wlwaterp pk60teknaserie pk61teknaakl pk62teknaapg pk64tekbaserie'.split(' '),
+    pumpCapacityOf: function (p) {
+      return !p || p.ai || /^ai$/i.test(p.verified || '') || this.UNCONFIRMED_PUMPS.indexOf(p.id) >= 0 ? NaN : this.parsePumpFlow(p.maxFlow);
+    },
+    calcPumpCapacity: function (s) {
+      if (s.pumpSource === 'manual') return this.parseNum(s.pumpMax);
+      if (s.pumpSource !== 'select') return NaN;
+      return this.pumpCapacityOf(this.allPumps().find(function (p) { return p.id === s.selectedCalcPumpId; }));
+    },
+    decimalText: function (n) {
+      var text = String(n);
+      if (!isFinite(Number(text))) return '';
+      if (/e/i.test(text)) {
+        var parts = text.toLowerCase().split('e'), sign = '';
+        var mantissa = parts[0];
+        if (mantissa.charAt(0) === '-') { sign = '-'; mantissa = mantissa.slice(1); }
+        var digits = mantissa.replace('.', '');
+        var point = (mantissa.indexOf('.') < 0 ? mantissa.length : mantissa.indexOf('.')) + Number(parts[1]);
+        if (point <= 0) text = '0.' + new Array(1 - point).join('0') + digits;
+        else if (point >= digits.length) text = digits + new Array(point - digits.length + 1).join('0');
+        else text = digits.slice(0, point) + '.' + digits.slice(point);
+        text = sign + text;
+      }
+      return text;
     },
     fmt: function (n, dp) {
       if (n === null || n === undefined || !isFinite(n)) return '—';
       var v = Number(n);
-      if (dp === 0) return Math.round(v).toLocaleString();
-      return v.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: dp });
+      var places = dp == null ? 3 : dp;
+      // Preserve small nonzero rates instead of displaying a false zero.
+      if (v !== 0 && Math.abs(v) < Math.pow(10, -places) / 2) places = Math.min(12, Math.ceil(-Math.log(Math.abs(v)) / Math.LN10) + 2);
+      var text = v.toFixed(places).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+      if (v !== 0 && Number(text) === 0) text = String(v);
+      // Display rounding is separate from exact numeric handoff serialization.
+      return this.decimalText(text);
+    },
+    finiteResult: function (n, positive) {
+      return isFinite(n) && (!positive || n > 0) ? n : NaN;
+    },
+    jarStockStrength: function () {
+      var sp = this.parseNum(this.state.stockPct);
+      return sp > 0 && sp <= 100 ? sp : NaN;
     },
     jarPpm: function (dose) {
-      var d = parseFloat(dose), sp = parseFloat(this.state.stockPct), v = parseFloat(this.state.jarVol);
-      if (!isFinite(d) || !isFinite(sp) || !isFinite(v) || v <= 0) return NaN;
-      return d * 10000 * sp / v;
+      var d = this.parseNum(dose), sp = this.jarStockStrength(), v = this.parseNum(this.state.jarVol);
+      if (!(d >= 0) || !(sp > 0 && sp <= 100) || !(v > 0)) return NaN;
+      var basis = this.state.jarVolumeBasis;
+      if (basis !== 'initial' && basis !== 'final') return NaN;
+      // Only initial RAW sample volume establishes a raw-feed nominal dose.
+      if (basis !== 'initial') return NaN;
+      return this.finiteResult(d * 10000 * sp / v, d > 0);
+    },
+    jarFinalPpm: function (dose) {
+      var d = this.parseNum(dose), sp = this.jarStockStrength(), v = this.parseNum(this.state.jarVol);
+      var basis = this.state.jarVolumeBasis;
+      if (!(d >= 0) || !(sp > 0 && sp <= 100) || !(v > 0) || (basis !== 'initial' && basis !== 'final') || (basis === 'final' && d >= v)) return NaN;
+      return this.finiteResult(d * 10000 * sp / (basis === 'initial' ? v + d : v), d > 0);
     },
     // Inverse of jarPpm: mL of stock that delivers `ppm` in the current jar setup.
     jarMl: function (ppm) {
-      var sp = parseFloat(this.state.stockPct), v = parseFloat(this.state.jarVol);
+      var sp = this.jarStockStrength(), v = this.parseNum(this.state.jarVol);
       if (!isFinite(ppm) || !isFinite(sp) || sp <= 0 || !isFinite(v) || v <= 0) return NaN;
-      return ppm * v / (10000 * sp);
+      ppm = this.parseNum(ppm);
+      if (!(ppm >= 0) || sp > 100) return NaN;
+      var basis = this.state.jarVolumeBasis;
+      if (basis !== 'initial' && basis !== 'final') return NaN;
+      if (basis !== 'initial') return NaN;
+      return this.finiteResult(ppm * v / (10000 * sp), ppm > 0);
+    },
+    // Full-string point density in kg/L. Plain decimals use the density field's
+    // kg/L contract; missing text, ranges, SG and unsupported units are unknown.
+    densitySourceKgL: function (text) {
+      if (typeof text !== 'string' || /bulk/i.test(text)) return NaN;
+      var m = /^\s*(?:approx\.?\s*|≈\s*|~\s*)?(\d+(?:\.\d+|,\d{1,2})?|\.\d+)(?:\s*(kg\/l|g\/cm[³3]|kg\/m[³3]))?(?:\s*\(at\s+\d+(?:\.\d+)?\s*°?c\))?\s*$/i.exec(text);
+      if (!m) {
+        var eq = /^(.+?)\s*\(=\s*([^()]+)\)\s*$/.exec(text);
+        if (!eq || !/(?:kg\/l|g\/cm[³3]|kg\/m[³3])\s*$/i.test(eq[1]) || !/(?:kg\/l|g\/cm[³3]|kg\/m[³3])\s*$/i.test(eq[2])) return NaN;
+        var left = this.densitySourceKgL(eq[1]), right = this.densitySourceKgL(eq[2]);
+        return left > 0 && right > 0 && Math.abs(left - right) <= 1e-12 * Math.max(left, right) ? left : NaN;
+      }
+      var n = this.parseNum(m[1].replace(',', '.'));
+      if (/^kg\/m/i.test(m[2] || '')) n /= 1000;
+      return isFinite(n) && n > 0 ? n : NaN;
+    },
+    // Old UI/ingestion used parseFloat. Reconcile every record independently of
+    // custom/verified metadata, retaining historical source bytes unchanged.
+    productDensityConfirmed: function (p) {
+      if (!p || typeof p.density !== 'number' || !isFinite(p.density) || !(p.density > 0) || /bulk/i.test(p.densityText || '')) return false;
+      var raw = this.densitySourceKgL(p.densityText);
+      if (raw > 0) return Math.abs(raw - p.density) <= 1e-12 * Math.max(raw, p.density);
+      // Existing curated ranges have an explicitly shipped representative value.
+      // Only the original object AND its captured semantic tuple may retain it.
+      return catalogueMaterials.some(function (c) {
+        return c.product === p && c.id === p.id && c.form === p.form && c.density === p.density && c.text === p.densityText;
+      });
+    },
+    // Validate material semantics at the calculation boundary as well as load.
+    // Stored snapshots are never rewritten; contradictory live assumptions abstain.
+    calcMaterial: function (s) {
+      var p = this.allProducts().find(function (x) { return x.id === s.calcProductId; });
+      var known = p ? (/^powder\b/i.test(p.form || '') ? 'powder' : (/^(liquid|emulsion)\b/i.test(p.form || '') ? 'liquid' : '')) : '';
+      var supported = s.form === 'liquid' || s.form === 'powder';
+      var valid = supported && (!s.calcProductId || (p && known === s.form && !(known === 'liquid' && !this.productDensityConfirmed(p))));
+      return { valid: valid, form: p && known ? known : (supported ? s.form : ''), density: valid && s.form === 'liquid' ? s.density : '' };
     },
     computeCalc: function () {
       var s = this.state;
-      var S = parseFloat(s.makedown);
-      var rho = parseFloat(s.density);
-      var pumpMax = parseFloat(s.pumpMax);
-      var liquid = s.form === 'liquid';
+      var material = this.calcMaterial(s);
+      var S = this.parseNum(s.makedown);
+      var rho = this.parseNum(s.density);
+      var pumpMax = this.calcPumpCapacity(s);
+      var liquid = material.valid && s.form === 'liquid';
+      var formOk = material.valid;
 
       var massGh = NaN;
       if (s.calcMode === 'conc') {
-        var Q = parseFloat(s.flow) * this.flowFactor(s.flowUnit), D = parseFloat(s.dose);
-        if (isFinite(Q) && isFinite(D)) massGh = Q * D;
-      } else {
-        var Qs = parseFloat(s.sludgeFlow) * this.flowFactor(s.sludgeFlowUnit), DS = parseFloat(s.ds), dk = parseFloat(s.doseKg);
-        var rhoS = parseFloat(s.sludgeDensity); if (!isFinite(rhoS) || rhoS <= 0) rhoS = 1;
+        var Q = this.parseNum(s.flow) * this.flowFactor(s.flowUnit), D = this.parseNum(s.dose);
+        if (Q > 0 && D >= 0) massGh = this.finiteResult(Q * D, D > 0);
+      } else if (s.calcMode === 'sludge') {
+        var Qs = this.parseNum(s.sludgeFlow) * this.flowFactor(s.sludgeFlowUnit), DS = this.parseNum(s.ds), dk = this.parseNum(s.doseKg);
+        var rhoS = this.parseNum(s.sludgeDensity);
         // dry-solids rate DS[t/h] = Qs[m3/h] x rho_sludge[t/m3] x (ds/100); product g/h = doseKg x DS x 1000
-        if (isFinite(Qs) && isFinite(DS) && isFinite(dk)) massGh = dk * (Qs * rhoS * (DS / 100)) * 1000;
+        if (Qs > 0 && DS > 0 && DS <= 100 && dk >= 0 && rhoS > 0) massGh = this.finiteResult(dk * (Qs * rhoS * (DS / 100)) * 1000, dk > 0);
       }
       var ok = isFinite(massGh);
-      var massKgH = ok ? massGh / 1000 : NaN;
-      var massKgDay = ok ? massKgH * 24 : NaN;
-      var neatLh = (ok && liquid && rho > 0) ? massKgH / rho : NaN;
-      var solLh = (ok && S > 0) ? massGh / (10 * S) : NaN;
-      var batchKg = (S > 0) ? 10 * S : NaN;
-      var batchHours = (isFinite(solLh) && solLh > 0) ? 1000 / solLh : NaN;
-      var strokePct = (isFinite(solLh) && pumpMax > 0) ? solLh / pumpMax * 100 : NaN;
+      var massKgH = ok ? this.finiteResult(massGh / 1000, massGh > 0) : NaN;
+      if (!isFinite(massKgH)) ok = false;
+      var massKgDay = ok ? this.finiteResult(massKgH * 24, massKgH > 0) : NaN;
+      var neatLh = (ok && liquid && rho > 0) ? this.finiteResult(massKgH / rho, massKgH > 0) : NaN;
+      var neat = s.feedBasis === 'neat';
+      var strengthOk = formOk && s.feedBasis === 'solution' && S > 0 && (liquid ? (rho > 0 && S <= 100 * rho) : S <= 100);
+      var solLh = neat ? (liquid ? neatLh : NaN) : ((ok && strengthOk) ? massGh / (10 * S) : NaN);
+      solLh = this.finiteResult(solLh, massGh > 0);
+      var batchKg = neat ? (liquid && rho > 0 ? 1000 * rho : NaN) : (strengthOk ? 10 * S : NaN);
+      var batchHours = (isFinite(solLh) && solLh > 0) ? this.finiteResult(1000 / solLh, true) : NaN;
+      var strokePct = (isFinite(solLh) && pumpMax > 0) ? this.finiteResult(solLh / pumpMax * 100, solLh > 0) : NaN;
 
       var dilution = '—';
-      if (liquid && S > 0 && rho > 0) {
-        var frac = (10 * S) / (1000 * rho);
-        if (frac > 0 && frac < 1) dilution = '1 : ' + this.fmt((1 - frac) / frac, 0) + ' (product : water)';
-      } else if (!liquid && S > 0) {
-        dilution = this.fmt(10 * S, 1) + ' g powder per L water';
+      if (neat && liquid && rho > 0) {
+        dilution = 'Neat product — no dilution';
+      } else if (!neat && strengthOk) {
+        dilution = this.fmt(10 * S, 3) + ' g product; top up to 1 L final volume';
+        if (liquid) dilution += ' (' + this.fmt(10 * S / rho, 3) + ' mL product)';
       }
 
       var warnings = [];
-      if (!ok) warnings.push({ text: 'Enter the flow and dose values above to calculate feed rates.', bg: '#FBF9F4', border: '#E2DDD0', color: '#6B776F' });
+      var numericUnavailable = ok && ((massGh > 0 && (strengthOk || (neat && liquid && rho > 0)) && !isFinite(solLh)) || (liquid && rho > 0 && !isFinite(neatLh)) || (solLh > 0 && pumpMax > 0 && !isFinite(strokePct)) || !isFinite(massKgDay));
+      if (numericUnavailable) warnings.push({ text: 'A derived rate exceeds the representable numeric range or underflows. No zero-rate or pump-setting confirmation is inferred; check the entered magnitudes.', bg: '#FBEBE7', border: '#E9C4B9', color: '#8A3A24' });
+      if ((!neat && !strengthOk) || (neat && (!liquid || !(rho > 0)))) warnings.push({ text: 'Invalid strength or density. Neat feed requires liquid product and confirmed kg/L density. Solution strength is g as-supplied product per 100 mL FINAL solution, not percent neat; it cannot exceed the neat mass per volume.', bg: '#FBEBE7', border: '#E9C4B9', color: '#8A3A24' });
+      if (!(pumpMax > 0)) warnings.push({ text: 'Pump capacity unavailable or ambiguous. Enter a confirmed capacity in L/h at operating pressure; bare gallons and multi-model annotations are not interpreted.', bg: '#FBF6EC', border: '#EBD9BC', color: '#8A5E17' });
+      if (!isFinite(this.flowFactor(s.calcMode === 'sludge' ? s.sludgeFlowUnit : s.flowUnit))) warnings.push({ text: 'Flow unit is unknown or missing. Confirm the flow unit explicitly before calculating delivery or catch advice; historical records are retained unchanged.', bg: '#FBF9F4', border: '#E2DDD0', color: '#6B776F' });
+      if (!ok) warnings.push({ text: 'Invalid or missing flow, dose or solids values. Use plain non-negative decimal numbers (decimal point, no commas or grouping); flow and density must be positive, dry solids 0–100%.', bg: '#FBF9F4', border: '#E2DDD0', color: '#6B776F' });
       if (isFinite(strokePct) && strokePct > 100) warnings.push({ text: 'Pump stroke exceeds 100% — this pump is too small for the required feed, or dilute the solution less (higher %). Consider a larger pump.', bg: '#FBEBE7', border: '#E9C4B9', color: '#8A3A24' });
       else if (isFinite(strokePct) && strokePct < 10 && strokePct > 0) warnings.push({ text: 'Pump running below ~10% stroke — accuracy suffers at very low output. Consider a smaller pump or a more dilute solution.', bg: '#FBF6EC', border: '#EBD9BC', color: '#8A5E17' });
-      if (!liquid && S > 0.7) warnings.push({ text: 'Powder solutions above ~0.5–0.7% get very viscous and hard to mix cleanly. Lower the make-down strength if you see gels or lumps.', bg: '#FBF6EC', border: '#EBD9BC', color: '#8A5E17' });
+      var cp = this.allProducts().find(function (p) { return p.id === s.calcProductId; });
+      var powderPolymer = cp && /\bpolymer\b|polyacrylamide|polyacrylate/i.test([cp.name, cp.application, cp.makeup, cp.subtitle].join(' '));
+      if (!liquid && powderPolymer && S > 0.7) warnings.push({ text: 'Powder polymer solutions can become viscous at higher strengths. Confirm the supplier-specific make-down limit and mixing procedure; no universal chemical threshold is assumed.', bg: '#FBF6EC', border: '#EBD9BC', color: '#8A5E17' });
 
-      var statusDot = !ok ? '#4A5A54' : (isFinite(strokePct) && strokePct > 100 ? '#E86A4A' : '#4FE0B5');
+      var statusDot = !ok || !isFinite(solLh) || !isFinite(strokePct) || !(pumpMax > 0) || numericUnavailable ? '#4A5A54' : (isFinite(strokePct) && strokePct > 100 ? '#E86A4A' : '#4FE0B5');
       var strokeColor = (isFinite(strokePct) && strokePct > 100) ? '#FF8A6B' : '#4FE0B5';
 
       var strokeLen = '—', strokeRate = '—';
@@ -348,7 +464,7 @@
           var spl = 0.8, spm = f / spl;
           if (spm > 1) { spl = 1.0; spm = f; }
           strokeLen = Math.round(spl * 100) + '%';
-          strokeRate = this.fmt(spm * 100, 0) + '%';
+          strokeRate = this.fmt(spm * 100, 2) + '%';
         } else if (f > 1) {
           strokeLen = '100%';
           strokeRate = 'over capacity';
@@ -400,34 +516,35 @@
         'High solids — sweep flocculation likely; judge settled AND filtered turbidity.'
       ][part] });
       if (isFinite(a)) {
-        // 'Adequate' and 'Well buffered' intentionally share the calm colour —
-        // only low alkalinity is a warning state.
+        // Illustrative concentration bands, not a calculated buffering balance.
         var ab = a < 40 ? 2 : 0;
-        rows.push({ label: 'Buffering (alkalinity)', lvl: a < 40 ? 'Poor' : (a <= 120 ? 'Adequate' : 'Well buffered'), fg: COL[ab].fg, bg: COL[ab].bg, note: a < 40
-          ? 'Poorly buffered — hydrolysing coagulants will depress pH; alkalinity supplementation may be needed.'
-          : (a <= 120 ? 'Buffering adequate for typical doses.' : 'Well buffered — post-dose pH easier to hold.') });
+        rows.push({ label: 'Buffering (alkalinity)', lvl: a < 40 ? 'Low (example)' : (a <= 120 ? 'Middle (example)' : 'High (example)'), fg: COL[ab].fg, bg: COL[ab].bg, note: a < 40
+          ? 'Low alkalinity example band. No alkalinity-demand calculation is available; verify the chemical species, dose basis and post-dose pH before deciding on supplementation.'
+          : 'Illustrative alkalinity band only — this does not establish buffering adequacy for the selected dose. Chemical species and dose basis are not verified, so no alkalinity demand is calculated.' });
       }
       if (isFinite(p)) {
         var pb = (p >= 6.5 && p <= 8) ? 0 : 1;
-        rows.push({ label: 'Raw pH', lvl: this.fmt(p, 1), fg: COL[pb].fg, bg: COL[pb].bg, note: p < 6.5
+        rows.push({ label: 'Raw pH', lvl: this.fmt(p, 2), fg: COL[pb].fg, bg: COL[pb].bg, note: p < 6.5
           ? 'Already low — watch total acid demand from the coagulant.'
           : (p > 8 ? 'High — check the post-dose pH target; coagulant choice and dose both move it.' : 'In the usual coagulation window.') });
       }
       var demand = Math.max(nom == null ? -1 : nom, part == null ? -1 : part);
       var summary = demand < 0 ? '' : 'Overall chemical demand: ' + LEV[demand].toLowerCase() + ' (example banding). Confirm with a compact multi-point jar test before recommending.';
-      return { rows: rows, summary: summary, hasAny: rows.length > 0 };
+      var self = this;
+      var invalid = ['turb', 'uv', 'alk', 'ph'].some(function (key) { var raw = r[pre + key]; return String(raw == null ? '' : raw).trim() !== '' && !isFinite(self.parseNum(raw)); });
+      return { rows: rows, summary: summary, hasAny: rows.length > 0, invalid: invalid };
     },
     // Mining bench dose: sample mass + %solids + stock added → g/t dry solids.
     computeBench: function () {
       var s = this.state;
       var m = this.parseNum(s.mgSample), so = this.parseNum(s.mgSolids), st = this.parseNum(s.mgStock), ml = this.parseNum(s.mgMl);
-      var dryG = (m > 0 && so > 0 && so <= 100) ? m * so / 100 : NaN; // g dry solids; >100 %w/w is physically impossible — abstain
-      var activeMg = (st > 0 && ml > 0) ? ml * st * 10 : NaN; // % w/v → mg/mL is ×10
-      var doseGt = (isFinite(dryG) && dryG > 0 && isFinite(activeMg)) ? activeMg * 1000 / dryG : NaN;
+      var dryG = (m > 0 && so > 0 && so <= 100) ? this.finiteResult(m * so / 100, true) : NaN; // g dry solids; >100 %w/w is physically impossible — abstain
+      var activeMg = (st > 0 && st <= 100 && ml > 0) ? this.finiteResult(ml * st * 10, true) : NaN; // % w/v → mg/mL is ×10
+      var doseGt = (isFinite(dryG) && dryG > 0 && isFinite(activeMg)) ? this.finiteResult(activeMg * 1000 / dryG, true) : NaN;
       return {
         dryG: this.fmt(dryG, 1),
         activeMg: this.fmt(activeMg, 1),
-        doseGt: this.fmt(doseGt, 0),
+        doseGt: this.fmt(doseGt, 2),
         ok: isFinite(doseGt)
       };
     },
@@ -439,7 +556,7 @@
     // is a confident 1000× dosing error; an abstention is just a missing chip).
     doseBasisOf: function (p) {
       var c = String((p && p.doseUnit) || '').replace(/\s+/g, '').toLowerCase();
-      if (!c) return 'mgL'; // no unit recorded — generic products dose mg/L on flow
+      if (!c) return null; // absent units cannot establish a dimensional basis
       if (c.indexOf('mg/l') >= 0 || c.indexOf('mgl') >= 0 || c.indexOf('ppm') >= 0) return 'mgL';
       if (c.indexOf('kg/t') >= 0 || c.indexOf('kgpert') >= 0) return 'kgt';
       if (c.indexOf('g/t') >= 0 || c.indexOf('gpert') >= 0) return 'gt';
@@ -449,7 +566,21 @@
     // already be in the product's own dose basis. Abstains rather than guesses:
     // no comparison for comma-grouped numbers, capped/multi-context ranges
     // ("0.25-0.5; NSF max 1.0"), or anything that isn't exactly "lo – hi".
+    doseAbstention: function (p) {
+      if (!p) return null;
+      var reason = '';
+      if (/[a-z%/]/i.test(String(p.doseRange || ''))) reason = 'Range includes unit text or multiple contexts; confirm matching units and basis before comparison.';
+      else if (p.doseMassBasis !== 'as-supplied') reason = 'Chemical dose basis is not confirmed as as-supplied product (may be active ingredient, dry equivalent or reference formulation).';
+      else if (!this.doseBasisOf(p)) reason = 'Dose units are unknown; mg/L and dry-tonne units require a solids balance, not a direct comparison.';
+      else if (!/^(?:\d+(?:\.\d{1,2})?|0\.\d+|\.\d+)\s*[-–—]\s*(?:\d+(?:\.\d{1,2})?|0\.\d+|\.\d+)$/.test(String(p.doseRange || '').trim())) reason = 'No unambiguous single dose window is available.';
+      if (!reason) {
+        var bounds = String(p.doseRange).split(/[-–—]/);
+        if (!(this.parseNum(bounds[0]) <= this.parseNum(bounds[1])) || !(this.parseNum(bounds[1]) > 0)) reason = 'Invalid dose window: bounds must be positive and in ascending order.';
+      }
+      return reason ? { abstain: true, name: p.name, raw: p.doseRange || '—', rawUnit: p.doseUnit || 'Unknown', note: p.doseNote || '', reason: reason } : null;
+    },
     doseWindowFor: function (p, val) {
+      if (this.doseAbstention(p)) return null;
       if (!p || !p.doseRange || !isFinite(val) || val <= 0) return null;
       var basis = this.doseBasisOf(p);
       if (!basis) return null; // unrecognisable basis — no comparison
@@ -460,11 +591,12 @@
       if (!all || all.length !== 1 || nums.length !== 2) return null;
       // Each bound must be a plain decimal with ≤2 dp: '1.000' is indistinguishable
       // from European thousands grouping, and '0.5.2' is a typo — abstain on both.
-      if (!nums.every(function (n) { return /^\d+(\.\d{1,2})?$/.test(n); })) return null;
+      if (!nums.every(function (n) { return /^(?:\d+(\.\d{1,2})?|0\.\d+|\.\d+)$/.test(n); })) return null;
       var m = all[0].match(/([\d.]+)\s*[–—-]\s*([\d.]+)/);
       var lo = parseFloat(m[1]), hi = parseFloat(m[2]);
       if (!isFinite(lo) || !isFinite(hi) || hi <= 0 || lo > hi) return null;
-      var status = val < lo ? 'below' : (val > hi ? 'above' : 'within');
+      var epsilon = 1e-12 * Math.max(1, Math.abs(val), Math.abs(lo), Math.abs(hi));
+      var status = val < lo - epsilon ? 'below' : (val > hi + epsilon ? 'above' : 'within');
       return { lo: lo, hi: hi, val: val, status: status, unit: this.doseUnitLabel(basis), raw: p.doseRange, name: p.name, verified: p.verified, note: p.doseNote || '' };
     },
     // Calc screen: compare the entered dose when the product's dose basis is
@@ -475,6 +607,8 @@
       var s = this.state;
       var p = this.allProducts().find(function (x) { return x.id === s.calcProductId; });
       if (!p) return null;
+      var abstain = this.doseAbstention(p);
+      if (abstain) return abstain;
       var basis = this.doseBasisOf(p);
       if (!basis) return null; // unrecognisable basis — abstain
       var mismatch = { mismatch: true, name: p.name, rawUnit: p.doseUnit || '', note: p.doseNote || '' };
@@ -496,10 +630,11 @@
       var s = this.state;
       var p = this.allProducts().find(function (x) { return x.id === s.guideProgProductId; }) || null;
       var d = this.parseNum(s.guideProgDose); // strict: '1,000' and '5-10' abstain, negatives rejected
-      if (!(d > 0)) d = NaN;
+      if (!(d > 0) || s.guideProgMassBasis !== 'as-supplied') d = NaN;
       var basis = s.guideProgDoseUnit; // mgL | kgt | gt
-      var win = null, unitMismatch = false;
-      if (p && isFinite(d)) {
+      var win = s.guideProgMassBasis !== 'as-supplied' ? { abstain: true, name: p ? p.name : 'Programme', raw: s.guideProgDose, rawUnit: this.doseUnitLabel(basis), reason: 'Programme dose is active ingredient or unknown basis. Confirm as-supplied product mass; no active-fraction conversion is assumed.' } : null, unitMismatch = false;
+      if (p && isFinite(d) && this.doseAbstention(p)) { win = this.doseAbstention(p); }
+      else if (p && isFinite(d)) {
         var pBasis = this.doseBasisOf(p);
         var val = NaN;
         if (pBasis && basis === pBasis) val = d;
@@ -512,7 +647,7 @@
       }
       var Q = this.parseNum(s.guideProgFlow) * this.flowFactor(s.guideProgFlowUnit);
       if (!(Q > 0)) Q = NaN;
-      var kgH = (basis === 'mgL' && isFinite(Q) && isFinite(d)) ? Q * d / 1000 : NaN;
+      var kgH = (basis === 'mgL' && isFinite(Q) && isFinite(d)) ? this.finiteResult(Q * d / 1000, true) : NaN;
       return {
         product: p, win: win, unitMismatch: unitMismatch,
         kgH: this.fmt(kgH, 2), kgDay: this.fmt(kgH * 24, 1), hasCons: isFinite(kgH),
@@ -522,8 +657,28 @@
     },
 
     // ---- state plumbing -----------------------------------------------------
-    setState: function (patch) { Object.assign(this.state, patch); this.render(); },
+    setState: function (patch, jarConfirmed) {
+      var s = this.state;
+      var preparationChanged = ['jarVol', 'stockPct', 'jarVolumeBasis', 'jarProductId'].some(function (key) { return Object.prototype.hasOwnProperty.call(patch, key) && patch[key] !== s[key]; }) || (patch.jars && JSON.stringify(patch.jars.map(function (j) { return j.dose; })) !== JSON.stringify(s.jars.map(function (j) { return j.dose; })));
+      if (!jarConfirmed && preparationChanged && (s.winner !== null || s.jars.some(function (j) { return j.ph || j.turb || j.floc; }))) return this.editJarSetup(patch);
+      // A catch belongs to the pump, media and operating setup it measured.
+      if (['selectedCalcPumpId', 'pumpSource', 'pumpMax', 'calcProductId', 'form', 'feedBasis', 'density', 'makedown', 'calcMode', 'flow', 'flowUnit', 'dose', 'sludgeFlow', 'sludgeFlowUnit', 'ds', 'doseKg', 'sludgeDensity', 'foundPumps', 'customProducts'].some(function (key) { return Object.prototype.hasOwnProperty.call(patch, key) && patch[key] !== s[key]; })) { patch.calMl = ''; patch.calSec = ''; }
+      if (['jarVol', 'stockPct', 'jarVolumeBasis', 'jars', 'winner', 'jarProductId'].some(function (key) { return Object.prototype.hasOwnProperty.call(patch, key) && patch[key] !== s[key]; })) patch.jarSaved = false;
+      Object.assign(s, patch); this.render();
+    },
 
+    // User preparation edits are one guarded transition. History is never mutated.
+    editJarSetup: function (patch) {
+      var s = this.state;
+      var changed = ['jarVol', 'stockPct', 'jarVolumeBasis', 'jarProductId', 'jars'].some(function (key) { return Object.prototype.hasOwnProperty.call(patch, key) && JSON.stringify(patch[key]) !== JSON.stringify(s[key]); });
+      if (changed) {
+        var results = s.winner !== null || s.jars.some(function (j) { return j.ph || j.turb || j.floc; });
+        if (results && !window.confirm('Change jar preparation? Recorded pH / turbidity / floc and winner will be cleared. Saved history is unchanged.')) { this.render(); return false; }
+        patch.jars = (patch.jars || s.jars).map(function (j) { return { dose: j.dose, ph: '', turb: '', floc: '' }; });
+        patch.winner = null; patch.jarSaved = false;
+      }
+      this.setState(patch, true); return true;
+    },
     allProducts: function () { return this.PRODUCTS.concat(this.state.customProducts); },
     allPumps: function () { return this.PUMPS.concat(this.state.foundPumps); },
 
@@ -539,11 +694,18 @@
     },
     // The patch a product selection applies to the calculator (form + density).
     productCalcPatch: function (p) {
-      var patch = {};
+      var patch = { density: '', form: 'liquid', feedBasis: 'solution', makedown: '' };
       if (!p) return patch;
-      patch.form = p.form === 'Powder' ? 'powder' : 'liquid';
-      if (p.density) patch.density = String(p.density);
+      patch.form = /^powder\b/i.test(p.form || '') ? 'powder' : (/^(liquid|emulsion)\b/i.test(p.form || '') ? 'liquid' : '');
+      if (patch.form === 'liquid' && this.productDensityConfirmed(p) && p.density > 0) patch.density = String(p.density);
+      if (patch.form === 'liquid' && !this.productDensityConfirmed(p)) patch.calcHandoffNote = 'Product density source is invalid or conflicts with its stored value. Original product retained; select a new manual material setup (Powder then Liquid) and confirm actual kg/L density.';
       return patch;
+    },
+    changeCalcForm: function (form) {
+      var s = this.state;
+      if (form === s.form) return;
+      // A manual material-form override cannot retain catalogue density/identity.
+      this.setState({ form: form, density: '', calcProductId: '', feedBasis: 'solution', makedown: '', calcHandoffNote: 'Material form changed. Confirm the actual product, liquid density and feed preparation before calculating delivery.' });
     },
     // ---- unsaved-field tracking (guards the update auto-reload) -------------
     // _snap records what each save actually persisted this session. Flags like
@@ -554,15 +716,15 @@
     _snap: { readings: {}, prog: {}, jars: '' },
     progSig: function (slate) {
       var hasData = String(slate.dose || '').trim() || String(slate.flow || '').trim() || slate.productId;
-      return hasData ? JSON.stringify([slate.productId || '', slate.dose || '', slate.doseUnit || '', slate.flow || '', slate.flowUnit || '']) : '';
+      return hasData ? JSON.stringify([slate.productId || '', slate.dose || '', slate.doseUnit || '', slate.flow || '', slate.flowUnit || '', slate.massBasis || 'unknown']) : '';
     },
     liveProgSig: function () {
       var s = this.state;
-      return this.progSig({ productId: s.guideProgProductId, dose: s.guideProgDose, doseUnit: s.guideProgDoseUnit, flow: s.guideProgFlow, flowUnit: s.guideProgFlowUnit });
+      return this.progSig({ productId: s.guideProgProductId, dose: s.guideProgDose, doseUnit: s.guideProgDoseUnit, flow: s.guideProgFlow, flowUnit: s.guideProgFlowUnit, massBasis: s.guideProgMassBasis });
     },
     jarsSig: function () {
       var s = this.state;
-      return JSON.stringify([s.jars, s.winner, s.jarCurrentDose]);
+      return JSON.stringify([s.jars, s.winner, s.jarCurrentDose, s.jarProductId, s.jarVol, s.stockPct, s.jarVolumeBasis]);
     },
     // index.html's controllerchange handler asks this before auto-reloading an
     // update: a mid-visit reload would destroy these memory-only entries.
@@ -634,7 +796,7 @@
         if (s.guideProgFor) {
           store[s.guideProgFor] = {
             productId: s.guideProgProductId, dose: s.guideProgDose, doseUnit: s.guideProgDoseUnit,
-            flow: s.guideProgFlow, flowUnit: s.guideProgFlowUnit
+            flow: s.guideProgFlow, flowUnit: s.guideProgFlowUnit, massBasis: s.guideProgMassBasis
           };
         }
         var pb = (window.PLAYBOOKS && window.PLAYBOOKS.list.find(function (x) { return x.id === id; })) || null;
@@ -644,6 +806,7 @@
         patch.guideProgFor = id;
         patch.guideProgProductId = saved ? saved.productId : '';
         patch.guideProgDose = saved ? saved.dose : '';
+        patch.guideProgMassBasis = saved && saved.massBasis ? saved.massBasis : 'unknown';
         patch.guideProgFlow = saved ? saved.flow : '';
         patch.guideProgDoseUnit = saved ? saved.doseUnit : ((pb && pb.progUnit) || 'mgL');
         patch.guideProgFlowUnit = saved ? saved.flowUnit : 'm3h';
@@ -659,10 +822,11 @@
       App.setState({ guideChecks: g });
     },
     guideToProducts: function (el) { App.setState({ screen: 'products', productFilter: el.dataset.v || 'all', productId: null, productQuery: '' }); },
-    guideToSludgeCalc: function () { App.setState({ screen: 'calc', calcMode: 'sludge' }); },
+    guideToSludgeCalc: function () { App.H.freshGuideCalc('sludge'); },
     // A playbook whose dose basis is mg/L on flow must land in Concentration
     // mode, whatever mode the calc was last left in.
-    guideToConcCalc: function () { App.setState({ screen: 'calc', calcMode: 'conc' }); },
+    guideToConcCalc: function () { App.H.freshGuideCalc('conc'); },
+    freshGuideCalc: function (mode) { App.setState({ screen: 'calc', calcMode: mode, calcProductId: '', form: 'liquid', density: '', flow: '', dose: '', sludgeFlow: '', ds: '', doseKg: '', sludgeDensity: '', makedown: '', feedBasis: 'solution', pumpSource: 'manual', selectedCalcPumpId: '', pumpMax: '', calMl: '', calSec: '', calcHandoffNote: 'New site calculation: enter confirmed flow, dose, density and feed preparation. No previous site values carried.' }); },
     onGuideReading: function (el) {
       var g = Object.assign({}, App.state.guideReadings);
       g[el.dataset.f] = el.value;
@@ -695,22 +859,25 @@
       var p = App.allProducts().find(function (x) { return x.id === s.guideProgProductId; }) || null;
       // '— not in library / unknown —' must clear the calc's product too: leaving
       // a stale selection would grade this plant's dose against the wrong datasheet.
-      var patch = Object.assign({ screen: 'calc', calcProductId: p ? p.id : '' }, App.productCalcPatch(p));
-      var d = App.parseNum(s.guideProgDose);   // strict parse: only clean positive
+      var patch = Object.assign({ screen: 'calc', calcProductId: p ? p.id : '', flow: '', dose: '', sludgeFlow: '', ds: '', doseKg: '', sludgeDensity: '', calMl: '', calSec: '', selectedCalcPumpId: '', pumpSource: 'manual', pumpMax: '' }, App.productCalcPatch(p));
+      patch.calcHandoffNote = s.guideProgMassBasis !== 'as-supplied' ? 'Dose not transferred: confirm as-supplied product mass. Active or unknown basis cannot be converted without a verified active fraction.' : '';
+      var d = s.guideProgMassBasis === 'as-supplied' ? App.parseNum(s.guideProgDose) : NaN;   // strict parse: only clean positive
       var f = App.parseNum(s.guideProgFlow);   // numbers may reach the calculator
       if (s.guideProgDoseUnit === 'mgL') {
         patch.calcMode = 'conc';
-        if (d > 0) patch.dose = String(d);
-        if (f > 0) { patch.flow = String(f); patch.flowUnit = s.guideProgFlowUnit; }
-      } else {
+        if (d > 0) patch.dose = App.decimalText(d);
+        if (f > 0) { patch.flow = App.decimalText(f); patch.flowUnit = s.guideProgFlowUnit; }
+      } else if (s.guideProgDoseUnit === 'kgt' || s.guideProgDoseUnit === 'gt') {
         patch.calcMode = 'sludge';
-        if (d > 0) patch.doseKg = String(s.guideProgDoseUnit === 'gt' ? d / 1000 : d);
-        if (f > 0) { patch.sludgeFlow = String(f); patch.sludgeFlowUnit = s.guideProgFlowUnit; }
+        var convertedDose = App.finiteResult(s.guideProgDoseUnit === 'gt' ? d / 1000 : d, true);
+        if (d > 0 && isFinite(convertedDose)) patch.doseKg = App.decimalText(convertedDose);
+        else if (d > 0) patch.calcHandoffNote = 'Dose not transferred: the unit conversion underflows or exceeds the representable numeric range.';
+        if (f > 0) { patch.sludgeFlow = App.decimalText(f); patch.sludgeFlowUnit = s.guideProgFlowUnit; }
         // carry the solids reading collected on this playbook screen — the calc's
         // stale % DS default would silently mis-state consumption otherwise
         var sv = App.parseNum(s.guideReadings[s.guideId + ':solids']);
-        if (sv > 0 && sv <= 100) patch.ds = String(sv);
-      }
+        if (sv > 0 && sv <= 100) patch.ds = App.decimalText(sv);
+      } else { patch.calcMode = 'conc'; patch.calcHandoffNote = 'Dose not transferred: unknown or unsupported dose unit. Confirm mg/L, kg/t or g/t explicitly.'; }
       App.setState(patch);
     },
     // Optimisation retest of the current programme: jump to jars pre-bracketed,
@@ -718,10 +885,16 @@
     guideProgRetest: function () {
       var s = App.state;
       var d = App.parseNum(s.guideProgDose);
-      if (!(d > 0)) return;
+      if (!(d > 0) || s.guideProgMassBasis !== 'as-supplied' || s.guideProgDoseUnit !== 'mgL') { App.setState({ bracketNote: 'Retest blocked: a dry-solids dose cannot become mg/L without a solids balance.' }); return; }
       var p = App.allProducts().find(function (x) { return x.id === s.guideProgProductId; }) || null;
-      App.setState({ screen: 'jars', jarCurrentDose: String(d), jarProductId: p ? p.id : '' });
+      if (p && App.doseBasisOf(p) !== 'mgL') { App.setState({ bracketNote: 'Retest blocked: product dose basis does not match mg/L.' }); return; }
+      var prev = { jarCurrentDose: s.jarCurrentDose, jarProductId: s.jarProductId, jars: s.jars };
+      // Bracketing confirms before replacing results; attribution commits only
+      // when a new jar array was actually produced.
+      App.setState({ jarCurrentDose: App.decimalText(d) });
       App.H.bracketJars();
+      if (s.jars !== prev.jars) App.setState({ screen: 'jars', jarProductId: p ? p.id : '' });
+      else App.setState({ jarCurrentDose: prev.jarCurrentDose, jarProductId: prev.jarProductId });
     },
     saveGuideReadings: function () {
       var s = App.state;
@@ -739,7 +912,7 @@
       if (progP || pd || pf) {
         prog = {
           product: progP ? progP.name : '',
-          dose: pd, unit: App.doseUnitLabel(s.guideProgDoseUnit),
+          dose: pd, unit: App.doseUnitLabel(s.guideProgDoseUnit), massBasis: s.guideProgMassBasis || 'unknown',
           flow: pf, flowUnit: App.flowLabel(s.guideProgFlowUnit)
         };
       }
@@ -800,9 +973,12 @@
         App.setState({ bracketNote: 'Jars unchanged — enter the current dose, jar volume and stock strength first.' });
         return;
       }
+      if (s.jarVolumeBasis !== 'initial') { App.setState({ bracketNote: 'Jars unchanged — nominal bracketing requires an initial RAW sample volume. Final total alone cannot establish it.' }); return; }
+      if (sp > 100) { App.setState({ bracketNote: 'Jars unchanged — stock strength must be within the supported 0–100% w/v domain.' }); return; }
       var doses = [0.5, 0.75, 1, 1.25, 1.5].map(function (f) {
         return Math.round(App.jarMl(cur * f) * 100) / 100; // 0.01 mL is the finest step the jar cards resolve
       });
+      if (doses.some(function (ml) { return typeof ml !== 'number' || !isFinite(ml); })) { App.setState({ bracketNote: 'Jars unchanged — a bracket endpoint exceeds the finite numeric range. Check the dose, raw sample volume and stock strength; no concentration remedy is inferred.' }); return; }
       var seen = {};
       var degenerate = doses.some(function (ml) { if (ml <= 0 || seen[ml]) return true; seen[ml] = 1; return false; });
       if (degenerate) {
@@ -815,8 +991,8 @@
         if (s.bracketNote) App.setState({ bracketNote: '' });
         return;
       }
-      var jars = doses.map(function (ml) { return { dose: String(ml), ph: '', turb: '', floc: '' }; });
-      App.setState({ jars: jars, winner: null, bracketNote: '' });
+      var jars = doses.map(function (ml) { return { dose: App.decimalText(ml), ph: '', turb: '', floc: '' }; });
+      App.setState({ jars: jars, winner: null, bracketNote: '' }, true);
     },
 
     // products
@@ -832,6 +1008,10 @@
     onNpField: function (el) { var f = el.dataset.f; var np = Object.assign({}, App.state.np); np[f] = el.value; App.setState({ np: np }); },
     confirmAddProduct: function () {
       var np = App.state.np; if (!np.name.trim()) return;
+      var densityText = String(np.density || '').trim();
+      // Density allows a single decimal comma with 1–2 places, never grouping.
+      var density = App.parseNum(/^\d+,\d{1,2}$/.test(densityText) ? densityText.replace(',', '.') : densityText);
+      if (densityText && !(density > 0)) { App.setState({ productSaveError: 'Invalid density: enter a positive kg/L decimal (e.g. 1.34 or 1,34), no grouping.' }); return; }
       var type = np.type;
       var tint = type === 'Coagulant' ? '#FBEFE7' : (type === 'Flocculant' ? '#EAF5EC' : '#E7F1FB');
       var tintText = type === 'Coagulant' ? '#B05A28' : (type === 'Flocculant' ? '#2C7A45' : '#1D5F99');
@@ -841,15 +1021,15 @@
         name: np.name.trim(), subtitle: (np.charge.trim() || type) + ' · ' + np.form,
         brand: np.brand.trim() || 'Custom entry', type: type, charge: np.charge.trim() || '—', form: np.form,
         densityText: np.density ? ('~' + np.density + ' kg/L') : '—',
-        doseRange: np.doseRange.trim() || '—', doseUnit: np.doseUnit,
+        doseRange: np.doseRange.trim() || '—', doseUnit: np.doseUnit, doseMassBasis: np.doseMassBasis || 'unknown',
         doseNote: 'Your custom entry — verify against the supplier data sheet.',
         application: np.application.trim() || '—', makeup: np.makeup.trim() || '—',
         makedownText: np.makedown.trim() || '—', ageing: np.ageing.trim() || '—',
-        density: parseFloat(np.density) || null, verified: 'custom'
+        density: density > 0 ? density : null, verified: 'custom'
       };
       var customProducts = [prod].concat(App.state.customProducts);
       App.persistProducts(customProducts);
-      App.setState({ customProducts: customProducts, showProductForm: false, np: { name: '', brand: '', type: 'Flocculant', charge: '', form: 'Powder', doseRange: '', doseUnit: 'mg/L on flow', density: '', makedown: '', ageing: '', application: '', makeup: '' } });
+      App.setState({ customProducts: customProducts, showProductForm: false, productSaveError: '', np: { name: '', brand: '', type: 'Flocculant', charge: '', form: 'Powder', doseRange: '', doseUnit: 'mg/L on flow', density: '', makedown: '', ageing: '', application: '', makeup: '' } });
     },
     deleteProduct: function (el) {
       var id = el.dataset.id;
@@ -881,10 +1061,10 @@
     pickCalcPump: function (el) {
       var id = el.dataset.id;
       var p = App.allPumps().find(function (x) { return x.id === id; });
-      var vf = p ? App.parsePumpFlow(p.maxFlow) : NaN;
+      var vf = p ? App.pumpCapacityOf(p) : NaN;
       App.setState({
         selectedCalcPumpId: id,
-        pumpMax: (p && isFinite(vf)) ? String(Math.round(vf * 100) / 100) : App.state.pumpMax,
+        pumpMax: (p && isFinite(vf)) ? App.decimalText(vf) : '',
         calcPumpPickerOpen: false, calcPumpPickerQuery: ''
       });
     },
@@ -896,11 +1076,11 @@
     },
     pickJarProduct: function (el) {
       var id = el.dataset.id;
-      var p = App.allProducts().find(function (x) { return x.id === id; });
-      App.setState({ jarProductId: id, stockPct: p ? '0.1' : App.state.stockPct, jarProductPickerOpen: false, jarProductPickerQuery: '' });
+      var s = App.state, patch = { jarProductId: id, jarProductPickerOpen: false, jarProductPickerQuery: '' };
+      App.editJarSetup(patch);
     },
-    onFormLiquid: function () { App.setState({ form: 'liquid' }); },
-    onFormPowder: function () { App.setState({ form: 'powder' }); },
+    onFormLiquid: function () { App.changeCalcForm('liquid'); },
+    onFormPowder: function () { App.changeCalcForm('powder'); },
     onSelectProduct: function (el) {
       var p = App.allProducts().find(function (x) { return x.id === el.value; }) || null;
       // note: product selection no longer changes the calc mode — the user's
@@ -911,21 +1091,21 @@
     onPumpManual: function () { App.setState({ pumpSource: 'manual' }); },
     onSelectCalcPump: function (el) {
       var p = App.allPumps().find(function (x) { return x.id === el.value; });
-      var v = p ? App.parsePumpFlow(p.maxFlow) : NaN;
-      App.setState({ selectedCalcPumpId: el.value, pumpMax: (p && isFinite(v)) ? String(Math.round(v * 100) / 100) : App.state.pumpMax });
+      var v = p ? App.pumpCapacityOf(p) : NaN;
+      App.setState({ selectedCalcPumpId: el.value, pumpMax: (p && isFinite(v)) ? App.decimalText(v) : '' });
     },
     startSaveClient: function () { App.setState({ screen: 'clients', showClientForm: true }); },
 
     // jars
     onSelectJarProduct: function (el) {
-      var p = App.allProducts().find(function (x) { return x.id === el.value; });
-      App.setState({ jarProductId: el.value, stockPct: p ? '0.1' : App.state.stockPct });
+      App.H.pickJarProduct({ dataset: { id: el.value } });
     },
-    setStockStrength: function (el) { App.setState({ stockPct: el.dataset.v }); },
+    setStockStrength: function (el) { App.editJarSetup({ stockPct: el.dataset.v }); },
     onJarField: function (el) {
       var i = +el.dataset.i, f = el.dataset.f, v = el.value;
       var jars = App.state.jars.map(function (j, k) { if (k === i) { var nj = Object.assign({}, j); nj[f] = v; return nj; } return j; });
-      App.setState({ jars: jars });
+      if (f === 'dose') App.editJarSetup({ jars: jars });
+      else App.setState({ jars: jars, jarSaved: false });
     },
     addJar: function () { App.setState({ jars: App.state.jars.concat([{ dose: '', ph: '', turb: '', floc: '' }]) }); },
     removeJar: function () {
@@ -943,12 +1123,14 @@
       var ppm = wj ? App.jarPpm(wj.dose) : NaN;
       if (!isFinite(ppm)) return;
       // plain string, not fmt(): locale grouping ('1,234.5') would misparse as 1
-      App.setState({ screen: 'calc', calcMode: 'conc', dose: String(Math.round(ppm * 100) / 100) });
+      App.setState(Object.assign({ screen: 'calc', calcMode: 'conc', dose: App.decimalText(ppm), calcProductId: jp ? jp.id : '', calMl: '', calSec: '', flow: '', sludgeFlow: '', ds: '', doseKg: '', sludgeDensity: '', pumpMax: '', selectedCalcPumpId: '', pumpSource: 'manual', calcHandoffNote: '' }, App.productCalcPatch(jp)));
     },
     startJarSave: function () { App.setState({ showJarSave: true, jarSaved: false, jarSaveError: '' }); },
     cancelJarSave: function () { App.setState({ showJarSave: false, jarSaveError: '' }); },
     confirmJarSave: function () {
       var s = App.state;
+      var self = App;
+      if (!isFinite(App.jarStockStrength()) || !(App.parseNum(s.jarVol) > 0) || (s.jarVolumeBasis !== 'initial' && s.jarVolumeBasis !== 'final') || s.jars.some(function (j) { return String(j.dose || '').trim() !== '' && !isFinite(self.jarFinalPpm(j.dose)); })) { App.setState({ jarSaveError: 'Invalid jar preparation or stock addition. Correct the setup before saving; existing history is unchanged.' }); return; }
       var jp = App.allProducts().find(function (x) { return x.id === s.jarProductId; });
       var client = s.clients.find(function (c) { return c.id === s.jarSaveClient; });
       var wj = (s.winner !== null && s.jars[s.winner]) ? s.jars[s.winner] : null;
@@ -958,10 +1140,11 @@
         date: new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }),
         clientId: s.jarSaveClient || '', clientName: client ? client.name : '',
         productId: s.jarProductId || '', productName: jp ? jp.name : 'Generic',
-        jarVol: s.jarVol, stockPct: s.stockPct,
+        jarVol: s.jarVol, stockPct: s.stockPct, jarVolumeBasis: s.jarVolumeBasis, doseConvention: s.jarVolumeBasis === 'initial' ? 'nominal-raw-sample-v1' : 'final-concentration-only-v1',
         jars: s.jars.map(function (j) { return Object.assign({}, j); }),
         winnerN: s.winner !== null ? s.winner + 1 : null,
-        winnerPpm: isFinite(wPpm) ? App.fmt(wPpm, 2) : '—',
+        winnerPpm: isFinite(wPpm) ? App.decimalText(wPpm) : '—',
+        winnerFinalMgL: wj && isFinite(App.jarFinalPpm(wj.dose)) ? App.decimalText(App.jarFinalPpm(wj.dose)) : '—',
         note: s.jarSaveNote.trim()
       };
       var jarTests = [t].concat(s.jarTests);
@@ -1041,10 +1224,15 @@
       var name = s.clientName.trim();
       if (!name) return;
       var p = App.allProducts().find(function (x) { return x.id === s.calcProductId; });
+      var capacity = App.calcPumpCapacity(s);
+      var capacityOk = isFinite(capacity) && capacity > 0;
       var calcFields = {
         mode: s.calcMode, flow: s.flow, dose: s.dose, sludgeFlow: s.sludgeFlow, ds: s.ds, doseKg: s.doseKg, sludgeDensity: s.sludgeDensity,
         flowUnit: s.flowUnit, sludgeFlowUnit: s.sludgeFlowUnit,
-        makedown: s.makedown, density: s.density, pumpMax: s.pumpMax, form: s.form,
+        makedown: s.makedown, density: App.calcMaterial(s).density,
+        pumpMax: capacityOk ? App.decimalText(capacity) : '',
+        pumpSource: s.pumpSource, selectedCalcPumpId: s.pumpSource === 'select' ? s.selectedCalcPumpId : '', pumpCapacityVersion: capacityOk ? 1 : null,
+        form: s.form, feedBasis: s.feedBasis,
         productId: s.calcProductId, productName: p ? p.name : ''
       };
       if (s.clientSite.trim()) calcFields.site = s.clientSite.trim();
@@ -1083,16 +1271,22 @@
       // readings-only client (saved from a playbook) — no calc setup to load
       if (!c.mode) { App.setState({ screen: 'clients' }); return; }
       var s = App.state;
+      var material = App.calcMaterial({ calcProductId: c.productId || '', form: c.form, density: c.density });
+      var materialNote = material.valid ? '' : 'Historical material form or density conflicts with the product, is missing or unknown. Original record retained; reconfirm material and liquid density.';
+      var capacity = App.calcPumpCapacity({ pumpSource: c.pumpSource, pumpMax: c.pumpMax, selectedCalcPumpId: c.selectedCalcPumpId });
+      var capacityOk = c.pumpCapacityVersion === 1 && isFinite(capacity) && capacity > 0;
       App.setState({
         screen: 'calc', productId: null,
-        calcProductId: c.productId || '', calcMode: c.mode || 'conc', form: c.form || 'liquid',
-        flow: c.flow != null ? c.flow : s.flow, dose: c.dose != null ? c.dose : s.dose,
-        sludgeFlow: c.sludgeFlow != null ? c.sludgeFlow : s.sludgeFlow, ds: c.ds != null ? c.ds : s.ds,
-        doseKg: c.doseKg != null ? c.doseKg : s.doseKg, sludgeDensity: c.sludgeDensity || '1.0',
-        flowUnit: c.flowUnit || 'm3h', sludgeFlowUnit: c.sludgeFlowUnit || 'm3h',
-        makedown: c.makedown != null ? c.makedown : s.makedown,
-        density: c.density != null ? c.density : s.density,
-        pumpMax: c.pumpMax != null ? c.pumpMax : s.pumpMax
+        calcProductId: c.productId || '', calcMode: c.mode || 'conc', form: material.form,
+        flow: c.flow != null ? c.flow : '', dose: c.dose != null ? c.dose : '',
+        sludgeFlow: c.sludgeFlow != null ? c.sludgeFlow : '', ds: c.ds != null ? c.ds : '',
+        doseKg: c.doseKg != null ? c.doseKg : '', sludgeDensity: c.sludgeDensity || '',
+        flowUnit: typeof c.flowUnit === 'string' && isFinite(App.flowFactor(c.flowUnit)) ? c.flowUnit : '', sludgeFlowUnit: typeof c.sludgeFlowUnit === 'string' && isFinite(App.flowFactor(c.sludgeFlowUnit)) ? c.sludgeFlowUnit : '',
+        makedown: c.makedown != null ? c.makedown : '',
+        density: material.density != null ? material.density : '',
+        pumpMax: capacityOk ? App.decimalText(capacity) : '',
+        calcHandoffNote: materialNote + (capacityOk ? '' : ' Historical pump capacity provenance is unknown or unconfirmed. Original record retained; reconfirm operating-duty capacity.'),
+        feedBasis: c.feedBasis || 'solution', calMl: '', calSec: '', pumpSource: capacityOk ? c.pumpSource : 'manual', selectedCalcPumpId: capacityOk && c.pumpSource === 'select' ? c.selectedCalcPumpId : ''
       });
     },
 
