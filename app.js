@@ -42,7 +42,7 @@
       flow: '50', dose: '',
       flowUnit: 'm3h', sludgeFlowUnit: 'm3h',
       sludgeFlow: '12', ds: '2.5', doseKg: '6', sludgeDensity: '1.0',
-      makedown: '0.5', density: '1.0', pumpMax: '20', feedBasis: 'solution',
+      makedown: '0.5', density: '1.0', pumpMax: '20', pumpMaxUnit: 'Lh', pumpMaxCanon: null, feedBasis: 'solution',
       pumpSource: 'manual', selectedCalcPumpId: '',
       productPickerOpen: false, productPickerQuery: '',
       calcPumpPickerOpen: false, calcPumpPickerQuery: '',
@@ -92,6 +92,15 @@
       { v: 'Lmin', label: 'L/min', k: 0.06 },
       { v: 'Lh', label: 'L/h', k: 0.001 },
       { v: 'MLd', label: 'ML/d', k: 1000 / 24 }
+    ],
+
+    // Dosing-pump flow units (entry/display only). Canonical stored/calculated value is always L/h:
+    // L/h = value x num / den. 1 L/min = 60 L/h, 1 L/s = 3600 L/h, 1 mL/min = 60 mL/h = 0.06 L/h.
+    PUMP_FLOW_UNITS: [
+      { v: 'Lh', label: 'L/h', num: 1, den: 1 },
+      { v: 'Lmin', label: 'L/min', num: 60, den: 1 },
+      { v: 'Ls', label: 'L/s', num: 3600, den: 1 },
+      { v: 'mLmin', label: 'mL/min', num: 60, den: 1000 }
     ],
 
     DOSE_UNITS: [
@@ -452,6 +461,58 @@
 
     // ---- maths (verbatim port) ---------------------------------------------
     flowFactor: function (u) { var f = this.FLOW_UNITS.find(function (x) { return x.v === u; }); return f ? f.k : NaN; },
+    // Unknown, empty, non-string or inherited-property codes never resolve to a unit (no guessing).
+    pumpUnitOf: function (code) { return typeof code === 'string' ? (this.PUMP_FLOW_UNITS.find(function (x) { return x.v === code; }) || null) : null; },
+    pumpFlowLabel: function (code) { var u = this.pumpUnitOf(code); return u ? u.label : ''; },
+    pumpFlowToLh: function (value, code) {
+      var u = this.pumpUnitOf(code);
+      if (!u || typeof value !== 'number' || !isFinite(value)) return NaN;
+      var lh = value * u.num / u.den;
+      return isFinite(lh) ? lh : NaN;
+    },
+    lhToPumpFlow: function (lh, code) {
+      var u = this.pumpUnitOf(code);
+      if (!u || typeof lh !== 'number' || !isFinite(lh)) return NaN;
+      var v = lh * u.den / u.num;
+      return isFinite(v) ? v : NaN;
+    },
+    // Display text of a canonical L/h value in the selected unit with >= 4 significant digits.
+    pumpFlowText: function (lh, code, dp) {
+      var v = this.lhToPumpFlow(lh, code);
+      if (!isFinite(v) || code === 'Lh') return this.fmt(code === 'Lh' ? lh : v, dp); // L/h text is byte-identical to the pre-unit releases
+      var places = dp;
+      if (v > 0) places = Math.max(dp, Math.min(12, 3 - Math.floor(Math.log(v) / Math.LN10)));
+      return this.fmt(v, places);
+    },
+    // Shortest decimal entry text that converts back to exactly this L/h capacity in the unit.
+    pumpEntryText: function (lh, code) {
+      var x = this.lhToPumpFlow(lh, code);
+      if (!isFinite(x)) return '';
+      for (var p = 1; p <= 17; p++) {
+        var t = Number(x.toPrecision(p));
+        if (this.pumpFlowToLh(t, code) === lh) return this.decimalText(t);
+      }
+      return this.decimalText(x);
+    },
+    // Readable entry text (<= 6 significant digits; integer digits are never rounded away) for a canonical L/h
+    // capacity in a unit. When the text is not exactly that capacity the exact L/h travels beside it as `canon`
+    // ({lh,text,unit}), so display rounding can never change the stored/used capacity or accumulate over unit switches.
+    pumpDisplayEntry: function (lh, code) {
+      var x = this.lhToPumpFlow(lh, code);
+      if (!isFinite(x)) return { text: '', canon: null };
+      var maxP = Math.max(6, x >= 1 ? Math.floor(Math.log(x) / Math.LN10 + 1e-12) + 1 : 0);
+      for (var p = 1; p <= maxP; p++) {
+        var t = Number(x.toPrecision(p));
+        if (this.pumpFlowToLh(t, code) === lh) return { text: this.decimalText(t), canon: null };
+      }
+      var text = this.decimalText(Number(x.toPrecision(maxP)));
+      return { text: text, canon: { lh: lh, text: text, unit: code } };
+    },
+    // Exact canonical L/h behind the entry field while the text still is the unedited rounded display of it.
+    pumpCanonLh: function (s) {
+      var c = s && s.pumpMaxCanon;
+      return c && typeof c === 'object' && typeof c.lh === 'number' && isFinite(c.lh) && c.text === String(s.pumpMax) && c.unit === s.pumpMaxUnit ? c.lh : NaN;
+    },
     flowLabel: function (u) { var f = this.FLOW_UNITS.find(function (x) { return x.v === u; }); return f ? f.label : 'm³/h'; },
     // Unknown codes label as themselves — a silent fallback label would relabel
     // a saved dose under the wrong unit.
@@ -488,9 +549,13 @@
       return !p || p.capacityLh === null || p.familyEnvelope || p.id === 'pk33d9wl5' || p.ai || /^ai$/i.test(p.verified || '') || this.UNCONFIRMED_PUMPS.indexOf(p.id) >= 0 ? NaN : this.parsePumpFlow(p.maxFlow);
     },
     calcPumpCapacity: function (s) {
-      if (s.pumpSource === 'manual') return this.parseNum(s.pumpMax);
+      if (s.pumpSource === 'manual') { var canonLh = this.pumpCanonLh(s); return isFinite(canonLh) ? canonLh : this.pumpFlowToLh(this.parseNum(s.pumpMax), s.pumpMaxUnit); }
       if (s.pumpSource !== 'select') return NaN;
       return this.pumpCapacityOf(this.allPumps().find(function (p) { return p.id === s.selectedCalcPumpId; }));
+    },
+    openComboName: function () {
+      var s = this.state;
+      return s.productPickerOpen ? 'product' : (s.calcPumpPickerOpen ? 'pump' : (s.jarProductPickerOpen ? 'jarProduct' : (s.guideProgPickerOpen ? 'guideProduct' : null)));
     },
     decimalText: function (n) {
       var text = String(n);
@@ -649,7 +714,8 @@
       var numericUnavailable = ok && ((massGh > 0 && (strengthOk || (neat && liquid && rho > 0)) && !isFinite(solLh)) || (liquid && rho > 0 && !isFinite(neatLh)) || (solLh > 0 && pumpMax > 0 && !isFinite(strokePct)) || !isFinite(massKgDay));
       if (numericUnavailable) warnings.push({ text: 'A derived rate exceeds the representable numeric range or underflows. No zero-rate or pump-setting confirmation is inferred; check the entered magnitudes.', bg: '#FBEBE7', border: '#E9C4B9', color: '#8A3A24' });
       if ((!neat && !strengthOk) || (neat && (!liquid || !(rho > 0)))) warnings.push({ text: 'Invalid strength or density. Neat feed requires liquid product and confirmed kg/L density. Solution strength is g as-supplied product per 100 mL FINAL solution, not percent neat; it cannot exceed the neat mass per volume.', bg: '#FBEBE7', border: '#E9C4B9', color: '#8A3A24' });
-      if (!(pumpMax > 0)) warnings.push({ text: 'Pump capacity unavailable or ambiguous. Enter a confirmed capacity in L/h at operating pressure; bare gallons and multi-model annotations are not interpreted.', bg: '#FBF6EC', border: '#EBD9BC', color: '#8A5E17' });
+      if (s.pumpSource === 'manual' && !this.pumpUnitOf(s.pumpMaxUnit)) warnings.push({ text: 'Pump flow unit is unknown or missing. Confirm the unit explicitly (L/h, L/min, L/s or mL/min) before the capacity is used; no unit is assumed and the entered number is not converted.', bg: '#FBF9F4', border: '#E2DDD0', color: '#56635B' });
+      if (!(pumpMax > 0)) warnings.push({ text: 'Pump capacity unavailable or ambiguous. Enter a confirmed capacity at operating pressure in the selected unit (L/h, L/min, L/s or mL/min); bare gallons and multi-model annotations are not interpreted.', bg: '#FBF6EC', border: '#EBD9BC', color: '#8A5E17' });
       if (!isFinite(this.flowFactor(s.calcMode === 'sludge' ? s.sludgeFlowUnit : s.flowUnit))) warnings.push({ text: 'Flow unit is unknown or missing. Confirm the flow unit explicitly before calculating delivery or catch advice; historical records are retained unchanged.', bg: '#FBF9F4', border: '#E2DDD0', color: '#56635B' });
       if (!ok) warnings.push({ text: 'Invalid or missing flow, dose or solids values. Use plain non-negative decimal numbers (decimal point, no commas or grouping); flow and density must be positive, dry solids 0–100%.', bg: '#FBF9F4', border: '#E2DDD0', color: '#56635B' });
       if (isFinite(strokePct) && strokePct > 100) warnings.push({ text: 'Pump stroke exceeds 100% — this pump is too small for the required feed, or dilute the solution less (higher %). Consider a larger pump.', bg: '#FBEBE7', border: '#E9C4B9', color: '#8A3A24' });
@@ -681,6 +747,10 @@
         solLh: this.fmt(solLh, 2),
         solLhNum: solLh,
         neatLh: liquid ? this.fmt(neatLh, 3) : 'n/a',
+        // Display in the selected pump unit. The canonical L/h fields above are unchanged; an unknown unit shows L/h.
+        pumpUnitLabel: this.pumpUnitOf(s.pumpMaxUnit) ? this.pumpFlowLabel(s.pumpMaxUnit) : 'L/h',
+        solPumpText: this.pumpUnitOf(s.pumpMaxUnit) ? this.pumpFlowText(solLh, s.pumpMaxUnit, 2) : this.fmt(solLh, 2),
+        neatPumpText: liquid ? (this.pumpUnitOf(s.pumpMaxUnit) ? this.pumpFlowText(neatLh, s.pumpMaxUnit, 3) : this.fmt(neatLh, 3)) : 'n/a',
         strokePct: isFinite(strokePct) ? this.fmt(strokePct, 1) + '%' : '—',
         strokeColor: strokeColor, strokeLen: strokeLen, strokeRate: strokeRate,
         dilution: dilution,
@@ -908,6 +978,8 @@
     // ---- state plumbing -----------------------------------------------------
     setState: function (patch, jarConfirmed) {
       var s = this.state;
+      // Any new pump-capacity text is a fresh exact entry: it never inherits the hidden precision of a rounded display.
+      if (Object.prototype.hasOwnProperty.call(patch, 'pumpMax') && !Object.prototype.hasOwnProperty.call(patch, 'pumpMaxCanon')) patch.pumpMaxCanon = null;
       // A scalar is an operator choice under one dosing authority, not a value
       // that silently follows a different product, source, basis or endpoints.
       // Explicit full-slate transitions (open/recall) carry their own selection.
@@ -1035,7 +1107,7 @@
     // update: a mid-visit reload would destroy these memory-only entries.
     calcInputSig: function () {
       var s = this.state;
-      return JSON.stringify(['calcMode', 'calcProductId', 'form', 'flow', 'dose', 'flowUnit', 'sludgeFlow', 'sludgeFlowUnit', 'ds', 'doseKg', 'sludgeDensity', 'makedown', 'density', 'feedBasis', 'pumpMax', 'pumpSource', 'selectedCalcPumpId', 'calMl', 'calSec'].map(function (k) { return s[k]; }));
+      return JSON.stringify(['calcMode', 'calcProductId', 'form', 'flow', 'dose', 'flowUnit', 'sludgeFlow', 'sludgeFlowUnit', 'ds', 'doseKg', 'sludgeDensity', 'makedown', 'density', 'feedBasis', 'pumpMax', 'pumpMaxUnit', 'pumpSource', 'selectedCalcPumpId', 'calMl', 'calSec'].map(function (k) { return s[k]; }));
     },
     hasUnsavedFieldData: function () {
       if (this._mutationBusy || this._restoreRecovery || this._snap.jarBackingInvalid) return true;
@@ -1068,7 +1140,7 @@
       return false;
     },
     clientCalcSig: function (c) {
-      return JSON.stringify(['mode', 'flow', 'dose', 'sludgeFlow', 'ds', 'doseKg', 'sludgeDensity', 'flowUnit', 'sludgeFlowUnit', 'makedown', 'density', 'pumpMax', 'pumpSource', 'selectedCalcPumpId', 'pumpCapacityVersion', 'form', 'feedBasis', 'productId', 'productName'].map(function (k) { return c[k]; }));
+      return JSON.stringify(['mode', 'flow', 'dose', 'sludgeFlow', 'ds', 'doseKg', 'sludgeDensity', 'flowUnit', 'sludgeFlowUnit', 'makedown', 'density', 'pumpMax', 'pumpMaxUnit', 'pumpMaxEntered', 'pumpSource', 'selectedCalcPumpId', 'pumpCapacityVersion', 'form', 'feedBasis', 'productId', 'productName'].map(function (k) { return c[k]; }));
     },
     // A signature may vouch for a draft only while its exact durable backing
     // still exists. Refresh and local mutations share this check. Inputs and
@@ -1116,10 +1188,10 @@
       return { flex: 1, border: 'none', background: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '3px', padding: '6px 2px', borderRadius: '10px', color: active ? '#4FE0B5' : '#ACBEB5' };
     },
     segStyle: function (active) {
-      return { flex: 1, border: 'none', cursor: 'pointer', borderRadius: '9px', padding: '9px 6px', fontSize: '13px', fontWeight: 700, lineHeight: 1.15, background: active ? '#16211F' : 'transparent', color: active ? '#EFECE3' : '#56635B' };
+      return { flex: 1, border: 'none', cursor: 'pointer', borderRadius: '9px', padding: '9px 6px', fontSize: '14px', fontWeight: 700, background: active ? '#16211F' : 'transparent', color: active ? '#EFECE3' : '#56635B' };
     },
     segSmall: function (active) {
-      return { flex: 1, border: 'none', cursor: 'pointer', borderRadius: '8px', padding: '9px 6px', fontSize: '12.5px', fontWeight: 700, background: active ? '#087568' : 'transparent', color: active ? '#FFF' : '#56635B' };
+      return { flex: 1, border: 'none', cursor: 'pointer', borderRadius: '8px', padding: '9px 6px', fontSize: '14px', fontWeight: 700, background: active ? '#087568' : 'transparent', color: active ? '#FFF' : '#56635B' };
     }
   };
 
@@ -1216,6 +1288,7 @@
       App.setState({ guideProgPickerOpen: open, guideProgPickerQuery: '' });
     },
     pickGuideProgProduct: function (el) {
+      App._refocusTrigger = App.openComboName() || null;   // focus returns to the picker trigger after a choice
       var p = App.allProducts().find(function (x) { return x.id === el.dataset.id; });
       App.setState({ guideProgProductId: el.dataset.id, guideProgSource: p ? JSON.parse(JSON.stringify(p)) : null, guideProgPickerOpen: false, guideProgPickerQuery: '', guideSaved: false, guideSaveError: '' });
     },
@@ -1458,6 +1531,7 @@
       App.setState({ productPickerOpen: open, calcPumpPickerOpen: false, productPickerQuery: '' });
     },
     pickProduct: function (el) {
+      App._refocusTrigger = App.openComboName() || null;   // focus returns to the picker trigger after a choice
       var id = el.dataset.id;
       var p = App.allProducts().find(function (x) { return x.id === id; }) || null;
       App.setState(Object.assign({ calcProductId: id, productPickerOpen: false, productPickerQuery: '' }, App.productCalcPatch(p)));
@@ -1468,28 +1542,56 @@
       App.setState({ calcPumpPickerOpen: open, productPickerOpen: false, calcPumpPickerQuery: '' });
     },
     pickCalcPump: function (el) {
+      App._refocusTrigger = App.openComboName() || null;   // focus returns to the picker trigger after a choice
       var id = el.dataset.id;
       var p = App.allPumps().find(function (x) { return x.id === id; });
       var vf = p ? App.pumpCapacityOf(p) : NaN;
+      // Catalogue capacity is L/h: express it in the selected unit exactly once (an unknown unit falls back to L/h).
+      var unit = App.pumpUnitOf(App.state.pumpMaxUnit) ? App.state.pumpMaxUnit : 'Lh';
+      var shown = (p && isFinite(vf)) ? App.pumpDisplayEntry(vf, unit) : { text: '', canon: null };
       App.setState({
         selectedCalcPumpId: id,
-        pumpMax: (p && isFinite(vf)) ? App.decimalText(vf) : '',
+        pumpMaxUnit: unit,
+        pumpMax: shown.text, pumpMaxCanon: shown.canon,
         calcPumpPickerOpen: false, calcPumpPickerQuery: ''
       });
     },
-    closePickers: function () { App.setState({ productPickerOpen: false, calcPumpPickerOpen: false, jarProductPickerOpen: false, guideProgPickerOpen: false }); },
+    // Which combo picker is open (null if none); used for Escape and for returning focus to its trigger.
+    closePickers: function (el) {
+      var wrap = el && el.closest ? el.closest('[data-combo]') : null;
+      App._refocusTrigger = (wrap && wrap.getAttribute('data-combo')) || App.openComboName();
+      App.setState({ productPickerOpen: false, calcPumpPickerOpen: false, jarProductPickerOpen: false, guideProgPickerOpen: false });
+    },
     toggleJarProductPicker: function () {
       var open = !App.state.jarProductPickerOpen;
       App._focusKey = open ? 'jarProductPickerQuery' : null;
       App.setState({ jarProductPickerOpen: open, jarProductPickerQuery: '' });
     },
     pickJarProduct: function (el) {
+      App._refocusTrigger = App.openComboName() || null;   // focus returns to the picker trigger after a choice
       var id = el.dataset.id;
       var s = App.state, patch = { jarProductId: id, jarProductPickerOpen: false, jarProductPickerQuery: '' };
       App.editJarSetup(patch);
     },
     onFormLiquid: function () { App.changeCalcForm('liquid'); },
     onFormPowder: function () { App.changeCalcForm('powder'); },
+    // Changing the unit re-expresses the entered capacity as the same physical pump (never reinterprets the number).
+    changePumpUnit: function (code) {
+      var s = App.state, next = App.pumpUnitOf(code) ? code : '';
+      var patch = { pumpMaxUnit: next, pumpMaxCanon: null }, text = String(s.pumpMax == null ? '' : s.pumpMax);
+      var oldUnit = App.pumpUnitOf(s.pumpMaxUnit), n = App.parseNum(text);
+      if (text.trim() !== '') {
+        if (!oldUnit || !next) patch.pumpMax = oldUnit && !next ? text : '';   // text of unknown meaning is cleared, never reinterpreted
+        else if (isFinite(n)) {
+          var canonLh = App.pumpCanonLh(s), lh = isFinite(canonLh) ? canonLh : App.pumpFlowToLh(n, s.pumpMaxUnit);
+          if (isFinite(lh)) { var shown = App.pumpDisplayEntry(lh, next); patch.pumpMax = shown.text; patch.pumpMaxCanon = shown.canon; }
+        }
+      }
+      var ml = s.calMl, sec = s.calSec;
+      App.setState(patch);
+      // Same physical pump and setup: the field catch measurement stays valid.
+      if (App.state.calMl !== ml || App.state.calSec !== sec) App.setState({ calMl: ml, calSec: sec });
+    },
     onPumpSelect: function () { App.setState({ pumpSource: 'select' }); },
     onPumpManual: function () { App.setState({ pumpSource: 'manual' }); },
     startSaveClient: function () { App.setState({ screen: 'clients', showClientForm: true }); },
@@ -1622,6 +1724,12 @@
         form: s.form, feedBasis: s.feedBasis,
         productId: s.calcProductId, productName: p ? p.name : ''
       };
+      // pumpMax above stays canonical L/h (older releases read it as L/h). The chosen display unit and the exact
+      // entered text are additive, backward-compatible fields; absent fields mean legacy L/h.
+      if (capacityOk && App.pumpUnitOf(s.pumpMaxUnit)) {
+        calcFields.pumpMaxUnit = s.pumpMaxUnit;
+        if (s.pumpSource === 'manual') calcFields.pumpMaxEntered = String(s.pumpMax).trim();
+      }
       if (s.clientSite.trim()) calcFields.site = s.clientSite.trim();
       var clients;
       var existing = App.findClientByName(s.clients, name, s.clientSite.trim());
@@ -1677,8 +1785,19 @@
       var productId = Object.prototype.hasOwnProperty.call(aliases, c.productId) ? aliases[c.productId] : (c.productId || '');
       var material = App.calcMaterial({ calcProductId: productId, form: c.form, density: c.density });
       var materialNote = material.valid ? '' : 'Historical material form or density conflicts with the product, is missing or unknown. Original record retained; reconfirm material and liquid density.';
-      var capacity = App.calcPumpCapacity({ pumpSource: c.pumpSource, pumpMax: c.pumpMax, selectedCalcPumpId: c.selectedCalcPumpId });
-      var capacityOk = c.pumpCapacityVersion === 1 && isFinite(capacity) && capacity > 0;
+      // The saved pumpMax is canonical L/h, so evaluate it explicitly as L/h (never through the display unit).
+      var capacity = App.calcPumpCapacity({ pumpSource: c.pumpSource, pumpMax: c.pumpMax, pumpMaxUnit: 'Lh', selectedCalcPumpId: c.selectedCalcPumpId });
+      var hasSavedUnit = Object.prototype.hasOwnProperty.call(c, 'pumpMaxUnit');
+      var unitOk = !hasSavedUnit || !!App.pumpUnitOf(c.pumpMaxUnit);
+      var capacityOk = c.pumpCapacityVersion === 1 && isFinite(capacity) && capacity > 0 && unitOk;
+      var unit = hasSavedUnit && unitOk ? c.pumpMaxUnit : 'Lh';
+      var pumpText = '', pumpCanon = null;
+      if (capacityOk) {
+        var shownPump = App.pumpDisplayEntry(capacity, unit); pumpText = shownPump.text; pumpCanon = shownPump.canon;
+        // The exact typed text is used only when it still means this canonical capacity; canonical wins otherwise.
+        var typed = typeof c.pumpMaxEntered === 'string' ? c.pumpMaxEntered.trim() : '', typedLh = App.pumpFlowToLh(App.parseNum(typed), unit);
+        if (c.pumpSource === 'manual' && typed && isFinite(typedLh) && Math.abs(typedLh - capacity) <= 1e-12 * Math.abs(capacity)) { pumpText = typed; pumpCanon = null; }
+      }
       App.setState({
         screen: 'calc', productId: null,
         calcProductId: productId, calcMode: c.mode || 'conc', form: material.form,
@@ -1688,8 +1807,8 @@
         flowUnit: typeof c.flowUnit === 'string' && isFinite(App.flowFactor(c.flowUnit)) ? c.flowUnit : '', sludgeFlowUnit: typeof c.sludgeFlowUnit === 'string' && isFinite(App.flowFactor(c.sludgeFlowUnit)) ? c.sludgeFlowUnit : '',
         makedown: c.makedown != null ? c.makedown : '',
         density: material.density != null ? material.density : '',
-        pumpMax: capacityOk ? App.decimalText(capacity) : '',
-        calcHandoffNote: materialNote + (capacityOk ? '' : ' Historical pump capacity provenance is unknown or unconfirmed. Original record retained; reconfirm operating-duty capacity.'),
+        pumpMax: pumpText, pumpMaxUnit: unit, pumpMaxCanon: pumpCanon,
+        calcHandoffNote: materialNote + (capacityOk ? '' : (unitOk ? ' Historical pump capacity provenance is unknown or unconfirmed. Original record retained; reconfirm operating-duty capacity.' : ' Historical pump unit is unknown or unsupported. Original record retained; reconfirm the pump flow unit and operating-duty capacity.')),
         feedBasis: c.feedBasis || 'solution', calMl: '', calSec: '', pumpSource: capacityOk ? c.pumpSource : 'manual', selectedCalcPumpId: capacityOk && c.pumpSource === 'select' ? c.selectedCalcPumpId : ''
       });
     },

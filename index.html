@@ -19,7 +19,10 @@
     a { color: #087568; text-decoration: none; }
     a:hover { color: #0A6E62; }
     input, select, textarea, button { font-family: inherit; }
-    input, select, textarea { font-size:16px !important; min-width:0; max-width:100%; }
+    button { line-height: inherit; }
+    #fa-frame { line-height:1.5; }
+    input, select, textarea { font-size:16px !important; font-weight:600 !important; line-height:1.25 !important; min-width:0; max-width:100%; }
+    textarea { line-height:1.5 !important; }
     button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible { outline:2px solid #0A6E62; outline-offset:2px; }
     input:focus, textarea:focus, select:focus { border-color: #087568 !important; }
     ::placeholder { color: #56635B; opacity:1; }
@@ -30,11 +33,39 @@
     #fa-screen .fa-dark-form .fa-native-select { background-color:#202E2A !important; border-color:#52665B !important; color:#EFECE3 !important; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='m4 6 4 4 4-4' fill='none' stroke='%23BACBC2' stroke-width='2'/%3E%3C/svg%3E") !important; }
     .fa-select-field { display:block; min-width:0; max-width:100%; }
     .fa-select-field select { display:block; width:100%; }
-    .fa-selected-value { display:block; min-width:0; max-width:100%; margin:5px 0 8px; font-size:16px; line-height:1.4; color:#4B564F; word-wrap:break-word; overflow-wrap:break-word; }
+    /* ---- Typography tokens (ONE scale; inline styles in render.js use only these values) -------------------
+       family: system stack everywhere (inherited by controls) · numbers/values: --fa-mono
+       sizes 12 / 14 / 16 / 20 / 24 px · weights 400 / 600 / 700 · line-height 1.5 (1.25 on field boxes and 20px+ values)
+       control value 16/600 (inputs, selects, textarea, combo trigger; 16px stops iOS zoom) · button 14/700 · nav 12/600
+       caption 12/700 #4B564F (dark forms #9FB0AA) · helper & chosen-value 12/400 #56635B (dark #BACBC2)
+       notice 14/400 · card heading 16/700 · spec label 12/700 uppercase #526159 · spec value 14/700 mono · picker row 16/600 + 12/400. */
+    :root { --fa-mono: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    #fa-screen button:not([aria-haspopup]):not(.fa-row) { font-size:14px !important; font-weight:700 !important; }
+    #fa-screen button[aria-haspopup] { font-size:16px !important; font-weight:600 !important; min-height:44px; }
+    #fa-screen button * { font-weight:400; }   /* only the button's own label is 700; nested helper text resets (explicit inline weights still win) */
+    #fa-screen button.fa-row { font-size:16px !important; font-weight:600 !important; }
+    #fa-nav { font-size:12px; font-weight:600; }
+    #fa-screen label { display:block; font-size:12px; font-weight:700; color:#4B564F; }
+    #fa-screen .fa-dark-form label { color:#9FB0AA; }
+    #fa-screen label > select, #fa-screen label > .fa-select-field, #fa-screen label > input { margin-top:5px; }
+    #fa-screen p, #fa-screen .fa-help { font-size:12px; font-weight:400; color:#56635B; }
+    #fa-screen p { margin:8px 0; }
+    #fa-screen .fa-dark-form .fa-help { color:#BACBC2; }
+    #fa-screen h3, #fa-screen .fa-heading { font-size:16px; font-weight:700; color:#16211F; }
+    #fa-screen dt { font-size:12px; font-weight:600; color:#56635B; }
+    #fa-screen dd { font-size:14px; font-weight:700; font-family:var(--fa-mono); margin-bottom:6px; }
+    #fa-screen .fa-btn { min-height:44px; padding:10px 14px; border:1px solid #D8D2C4; border-radius:12px; background:#FBF9F4; color:#16211F; cursor:pointer; }
+    #fa-screen [role="note"] { font-size:12px; font-weight:400; color:#4B564F; }
+    #fa-screen .fa-note, #fa-screen .fa-note-text, #fa-screen [role="alert"], #fa-screen [role="status"] { font-size:14px; font-weight:400; }
+    #fa-screen .fa-note { padding:11px 13px; border-radius:12px; background:#FBF6EC; border:1px solid #EBD9BC; color:#8A5E17; }
+    #fa-screen .fa-note-error { background:#FBEBE7; border-color:#E9C4B9; color:#8A3A24; }
+    #fa-screen .fa-dark-form .fa-note { padding:0; background:none; border:0; color:#FF8A6B; }
+    .fa-selected-value { display:block; min-width:0; max-width:100%; margin:5px 0 8px; font-size:12px; font-weight:400; color:#56635B; word-wrap:break-word; overflow-wrap:break-word; }
     .fa-dark-form .fa-selected-value { color:#BACBC2; }
     .fa-pump-specs { margin-top:12px; display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:8px; }
     .fa-pump-specs > div { min-width:0; word-wrap:break-word; overflow-wrap:break-word; }
     .fa-pump-control { grid-column:1 / -1; }
+    #fa-frame.fa-picker-open #fa-screen { overflow-y:hidden !important; overscroll-behavior:none; }
     .scroll::-webkit-scrollbar { width: 0; height: 0; }
     @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
     @keyframes spin { to { transform: rotate(360deg); } }
