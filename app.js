@@ -30,6 +30,8 @@
     return { product: p, id: p.id, form: p.form, density: p.density, text: p.densityText };
   });
 
+  // Session-only operator consent: never restored from schema/provenance flags.
+  var jarPreparationAuthority = null;
   var App = {
     state: {
       screen: 'home',
@@ -520,6 +522,23 @@
     finiteResult: function (n, positive) {
       return isFinite(n) && (!positive || n > 0) ? n : NaN;
     },
+    jarPreparationTuple: function () {
+      var s = this.state, p = this.allProducts().find(function (x) { return x.id === s.jarProductId; }) || null;
+      return { product: p, tuple: JSON.stringify([s.jarProductId, p, s.stockPct, s.jarVol, s.jarVolumeBasis]) };
+    },
+    jarPreparationConfirmed: function () {
+      var current = this.jarPreparationTuple();
+      if (!jarPreparationAuthority || current.product !== jarPreparationAuthority.product || current.tuple !== jarPreparationAuthority.tuple) { jarPreparationAuthority = null; return false; }
+      return true;
+    },
+    confirmJarPreparation: function () {
+      var s = this.state;
+      if (!isFinite(this.jarStockStrength()) || !(this.parseNum(s.jarVol) > 0) || (s.jarProductId && !this.allProducts().some(function (p) { return p.id === s.jarProductId; })) || (s.jarVolumeBasis !== 'initial' && s.jarVolumeBasis !== 'final')) { this.setState({ bracketNote: 'Preparation unconfirmed — correct stock, product and sample volume/basis first.' }); return; }
+      var p = this.jarPreparationTuple().product;
+      if (!window.confirm('Confirm actual prepared stock for ' + (p ? p.name : 'manually specified as-supplied product') + ': ' + s.stockPct + '% w/v as-supplied product (grams per 100 mL FINAL stock volume), NOT active ingredient. Sample: ' + s.jarVol + ' mL, ' + (s.jarVolumeBasis === 'initial' ? 'initial RAW sample before stock addition; nominal dose uses this raw volume' : 'final TOTAL including stock; raw sample volume unknown and transfer blocked') + '. I have checked the actual preparation and supplier-specific compatibility. This is not supplier/site approval.')) return;
+      jarPreparationAuthority = this.jarPreparationTuple();
+      this.setState({ bracketNote: '', jarSaved: false });
+    },
     jarStockStrength: function () {
       var sp = this.parseNum(this.state.stockPct);
       return sp > 0 && sp <= 100 ? sp : NaN;
@@ -908,6 +927,7 @@
       if (['selectedCalcPumpId', 'pumpSource', 'pumpMax', 'calcProductId', 'form', 'feedBasis', 'density', 'makedown', 'calcMode', 'flow', 'flowUnit', 'dose', 'sludgeFlow', 'sludgeFlowUnit', 'ds', 'doseKg', 'sludgeDensity', 'foundPumps', 'customProducts'].some(function (key) { return Object.prototype.hasOwnProperty.call(patch, key) && patch[key] !== s[key]; })) { patch.calMl = ''; patch.calSec = ''; }
       if (['jarVol', 'stockPct', 'jarVolumeBasis', 'jars', 'winner', 'jarProductId'].some(function (key) { return Object.prototype.hasOwnProperty.call(patch, key) && patch[key] !== s[key]; })) patch.jarSaved = false;
       Object.assign(s, patch);
+      this.jarPreparationConfirmed();
       this.invalidateProgrammeAuthorities();
       if (Object.prototype.hasOwnProperty.call(patch, 'clients') || Object.prototype.hasOwnProperty.call(patch, 'jarTests')) this.invalidateSavedSnapshots();
       this.render();
@@ -977,10 +997,14 @@
       var hasData = String(slate.dose || '').trim() || String(slate.flow || '').trim() || slate.productId || slate.slurryDensity || slate.ds || slate.scalar || slate.source || slate.restoreError;
       return hasData ? JSON.stringify([slate.productId || '', slate.dose || '', slate.doseUnit || '', slate.flow || '', slate.flowUnit || '', slate.massBasis || 'unknown', slate.slurryDensity || '', slate.ds || '', slate.scalar || '', slate.source || null, slate.restoreError || '']) : '';
     },
+    guideClientIsDirty: function (pid, slate) {
+      var saved = (this._snap.guideBacking || {})[pid];
+      return saved ? (slate.saveClient || '') !== saved.clientId : !!slate.saveClient;
+    },
     guideDraftIsDirty: function (pb) {
       var s = this.state, snap = this._snap;
       var slate = s.guideProgFor === pb.id ? this.programmeSlate() : (s.guideProgByPb[pb.id] || {});
-      if (String(slate.saveName || '').trim()) return true;
+      if (String(slate.saveName || '').trim() || this.guideClientIsDirty(pb.id, slate)) return true;
       var sig = this.progSig(slate);
       if ((sig || snap.prog[pb.id]) && snap.prog[pb.id] !== sig) return true;
       var observation = JSON.stringify([slate.observedDate || '', slate.observedTime || '', slate.observedOffset || '']);
@@ -994,9 +1018,18 @@
       var s = this.state;
       return this.progSig(this.programmeSlate());
     },
-    jarsSig: function () {
+    // Identity is revalidated at every rendering boundary, not only on clicks.
+    jarHistoryRecord: function (id) {
+      if (typeof id !== 'string' || !id.trim()) return null;
+      var matches = this.state.jarTests.filter(function (t) { return t.id === id; });
+      return matches.length === 1 && (!this.state.jarHistoryClientId || matches[0].clientId === this.state.jarHistoryClientId) ? matches[0] : null;
+    },
+    jarsSetupSig: function () {
       var s = this.state;
-      return JSON.stringify([s.jars, s.winner, s.jarCurrentDose, s.jarProductId, s.jarVol, s.stockPct, s.jarVolumeBasis]);
+      return JSON.stringify([s.jars, s.winner, s.jarCurrentDose, s.jarProductId, s.jarVol, s.stockPct, s.jarVolumeBasis, s.jarSaveClient, s.jarSaveNote]);
+    },
+    jarsSig: function () {
+      return JSON.stringify([this.jarsSetupSig(), this.jarPreparationConfirmed()]);
     },
     // index.html's controllerchange handler asks this before auto-reloading an
     // update: a mid-visit reload would destroy these memory-only entries.
@@ -1005,7 +1038,7 @@
       return JSON.stringify(['calcMode', 'calcProductId', 'form', 'flow', 'dose', 'flowUnit', 'sludgeFlow', 'sludgeFlowUnit', 'ds', 'doseKg', 'sludgeDensity', 'makedown', 'density', 'feedBasis', 'pumpMax', 'pumpSource', 'selectedCalcPumpId', 'calMl', 'calSec'].map(function (k) { return s[k]; }));
     },
     hasUnsavedFieldData: function () {
-      if (this._mutationBusy || this._restoreRecovery) return true;
+      if (this._mutationBusy || this._restoreRecovery || this._snap.jarBackingInvalid) return true;
       var s = this.state, snap = this._snap;
       if (s.showClientForm || s.showProductForm || s.showPumpForm || s.showJarSave || String(s.guideSaveName || '').trim()) return true;
       // Conservative: a changed calculation can include memory-only catch inputs.
@@ -1015,6 +1048,7 @@
       }
       if (s.guideProgFor && (s.guideObservedDate || s.guideObservedTime || s.guideObservedOffset || (snap.observation && snap.observation[s.guideProgFor])) && (!snap.observation || snap.observation[s.guideProgFor] !== this.observationSig())) return true;
       if (s.guideProgFor) {
+        if (this.guideClientIsDirty(s.guideProgFor, this.programmeSlate())) return true;
         var liveSig = this.liveProgSig();
         if ((liveSig || snap.prog[s.guideProgFor]) && snap.prog[s.guideProgFor] !== liveSig) return true;
       }
@@ -1022,12 +1056,14 @@
         var sig = this.progSig(s.guideProgByPb[pid] || {});
         if ((sig || snap.prog[pid]) && snap.prog[pid] !== sig) return true;
         var parked = s.guideProgByPb[pid] || {};
-        if (String(parked.saveName || '').trim()) return true;
+        if (String(parked.saveName || '').trim() || this.guideClientIsDirty(pid, parked)) return true;
         if ((parked.observedDate || parked.observedTime || parked.observedOffset || (snap.observation && snap.observation[pid])) && (!snap.observation || snap.observation[pid] !== JSON.stringify([parked.observedDate || '', parked.observedTime || '', parked.observedOffset || '']))) return true;
       }
-      var jarsHaveData = s.winner !== null || String(s.jarCurrentDose || '').trim() !== '' ||
-        s.jars.some(function (j) { return j.ph || j.turb || j.floc; });
-      if (jarsHaveData && snap.jars !== this.jarsSig()) return true;
+      // Compare every saved slate, even stock-only rows or cleared observations.
+      // Defaults alone are not a draft, but fresh session consent always is until
+      // a successful explicit save records this exact current-runtime setup.
+      if (snap.jars ? snap.jars !== this.jarsSig() :
+          (this.jarsSetupSig() !== this._initialJarsSetupSig || this.jarPreparationConfirmed())) return true;
       if (String(s.mgMl || '').trim()) return true; // bench entry has no save path
       return false;
     },
@@ -1054,8 +1090,11 @@
         var c = s.clients.find(function (r) { return r.id === snap.calcBacking.id; });
         if (!c || this.clientCalcSig(c) !== snap.calcBacking.sig) { this._initialCalcSig = null; delete snap.calcBacking; }
       }
-      if (snap.jarBacking && !s.jarTests.some(function (t) { return t.id === snap.jarBacking.id && JSON.stringify(t) === snap.jarBacking.record; })) {
-        snap.jars = ''; delete snap.jarBacking; s.jarSaved = false;
+      if (snap.jarBacking) {
+        var jarMatches = s.jarTests.filter(function (t) { return t.id === snap.jarBacking.id; });
+        if (jarMatches.length !== 1 || JSON.stringify(jarMatches[0]) !== snap.jarBacking.record) {
+          snap.jars = ''; snap.jarBackingInvalid = true; delete snap.jarBacking; s.jarSaved = false;
+        }
       }
     },
     // Record what a successful playbook save covered: this playbook's readings
@@ -1085,6 +1124,7 @@
   };
 
   App._initialCalcSig = App.calcInputSig();
+  App._initialJarsSetupSig = App.jarsSetupSig();
 
   // ============================ HANDLERS =====================================
   var H = {
@@ -1218,13 +1258,11 @@
       if (!(d > 0) || s.guideProgMassBasis !== 'as-supplied' || s.guideProgDoseUnit !== 'mgL') { App.setState({ bracketNote: 'Retest blocked: a dry-solids dose cannot become mg/L without a solids balance.' }); return; }
       var p = App.allProducts().find(function (x) { return x.id === s.guideProgProductId; }) || null;
       if (p && App.entryDoseBasisOf(p) !== 'mgL') { App.setState({ bracketNote: 'Retest blocked: product dose basis does not match mg/L.' }); return; }
-      var prev = { jarCurrentDose: s.jarCurrentDose, jarProductId: s.jarProductId, jars: s.jars };
-      // Bracketing confirms before replacing results; attribution commits only
-      // when a new jar array was actually produced.
-      App.setState({ jarCurrentDose: App.decimalText(d) });
+      // Product/sample preparation consent is separate from programme dose basis.
+      // Stage the intended product without inventing or confirming stock strength.
+      if (!App.editJarSetup({ jarProductId: p ? p.id : '' })) return;
+      App.setState({ screen: 'jars', jarCurrentDose: App.decimalText(d) });
       App.H.bracketJars();
-      if (s.jars !== prev.jars) App.setState({ screen: 'jars', jarProductId: p ? p.id : '' });
-      else App.setState({ jarCurrentDose: prev.jarCurrentDose, jarProductId: prev.jarProductId });
     },
     newGuideProgramme: function () {
       if (!window.confirm('Clear the live programme for a fresh explicit setup? Saved history is unchanged.')) return;
@@ -1334,6 +1372,7 @@
     // masquerade as the requested bracket.
     bracketJars: function () {
       var s = App.state;
+      if (!App.jarPreparationConfirmed()) { App.setState({ bracketNote: 'Jars unchanged — confirm actual prepared stock concentration and sample volume/basis first. The example default is not preparation evidence.' }); return; }
       var cur = App.parseNum(s.jarCurrentDose), vol = App.parseNum(s.jarVol), sp = App.parseNum(s.stockPct);
       if (!(cur > 0) || !(vol > 0) || !(sp > 0)) {
         App.setState({ bracketNote: 'Jars unchanged — enter the current dose, jar volume and stock strength first.' });
@@ -1455,6 +1494,15 @@
     onPumpManual: function () { App.setState({ pumpSource: 'manual' }); },
     startSaveClient: function () { App.setState({ screen: 'clients', showClientForm: true }); },
 
+    // Viewing history is read-only: exact identity, never a live setup recall.
+    viewClientJarTests: function (el) { var id = el.dataset.id; if (typeof id === 'string' && id.trim() && App.state.clients.filter(function (c) { return c.id === id; }).length === 1) App.setState({ screen: 'jars', jarHistoryClientId: id, jarHistoryId: null }); },
+    showAllJarTests: function () { App.setState({ jarHistoryClientId: '', jarHistoryId: null }); },
+    viewJarTest: function (el) {
+      var id = el.dataset.id;
+      if (!App.jarHistoryRecord(id)) { App.setState({ jarHistoryId: null, storageError: 'Saved jar view unavailable: select a unique stable ID; ambiguous or missing identities are not guessed. Original history is unchanged.' }); return; }
+      App.setState({ jarHistoryId: id });
+    },
+    closeJarTest: function () { App.setState({ jarHistoryId: null }); },
     // jars
     setStockStrength: function (el) { App.editJarSetup({ stockPct: el.dataset.v }); },
     onJarField: function (el) {
@@ -1468,8 +1516,10 @@
       App.setState({ jars: App.state.jars.length > 1 ? App.state.jars.slice(0, -1) : App.state.jars, winner: App.state.winner === App.state.jars.length - 1 ? null : App.state.winner });
     },
     setWinner: function (el) { App.setState({ winner: +el.dataset.i }); },
+    confirmJarPreparation: function () { App.confirmJarPreparation(); },
     useWinner: function () {
       var s = App.state;
+      if (!App.jarPreparationConfirmed()) { App.setState({ bracketNote: 'Cannot transfer — confirm actual prepared stock concentration and sample volume/basis first.' }); return; }
       // A jar mg/L is only a full-scale dose for mg/L-on-flow products. For a
       // dry-tonne-basis product there is no conversion without the solids
       // balance — the winner card explains this instead of offering the button.
@@ -1496,11 +1546,11 @@
         date: new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }),
         clientId: s.jarSaveClient || '', clientName: client ? client.name : '',
         productId: s.jarProductId || '', productName: jp ? jp.name : 'Generic',
-        jarVol: s.jarVol, stockPct: s.stockPct, jarVolumeBasis: s.jarVolumeBasis, doseConvention: s.jarVolumeBasis === 'initial' ? 'nominal-raw-sample-v1' : 'final-concentration-only-v1',
+        jarVol: s.jarVol, stockPct: s.stockPct, stockPreparation: App.jarPreparationConfirmed() ? 'operator-confirmed-as-supplied-wv-v1' : 'unknown', jarVolumeBasis: s.jarVolumeBasis, doseConvention: s.jarVolumeBasis === 'initial' ? 'nominal-raw-sample-v1' : 'final-concentration-only-v1',
         jars: s.jars.map(function (j) { return Object.assign({}, j); }),
         winnerN: s.winner !== null ? s.winner + 1 : null,
-        winnerPpm: isFinite(wPpm) ? App.decimalText(wPpm) : '—',
-        winnerFinalMgL: wj && isFinite(App.jarFinalPpm(wj.dose)) ? App.decimalText(App.jarFinalPpm(wj.dose)) : '—',
+        winnerPpm: App.jarPreparationConfirmed() && isFinite(wPpm) ? App.decimalText(wPpm) : '—',
+        winnerFinalMgL: App.jarPreparationConfirmed() && wj && isFinite(App.jarFinalPpm(wj.dose)) ? App.decimalText(App.jarFinalPpm(wj.dose)) : '—',
         note: s.jarSaveNote.trim()
       };
       var jarTests = [t].concat(s.jarTests);
@@ -1508,9 +1558,10 @@
         App.setState({ jarSaveError: 'Could not write to this device’s storage — the test is NOT saved. Free up space (or leave private browsing) and save again.' });
         return;
       }
-      App._snap.jars = App.jarsSig(); // this exact jar setup is now on record — safe for an update reload
       App._snap.jarBacking = { id: t.id, record: JSON.stringify(t) };
+      App._snap.jarBackingInvalid = false;
       App.setState({ jarTests: jarTests, showJarSave: false, jarSaved: true, jarSaveNote: '', jarSaveError: '' });
+      App._snap.jars = App.jarsSig(); // explicit successful save only; consent stays session-only
     },
     deleteJarTest: function (el) {
       var id = el.dataset.id;

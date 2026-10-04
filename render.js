@@ -10,6 +10,9 @@
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
+  function rawHistorical(value) {
+    return value === null || value === undefined || value === '' ? 'Unknown / not recorded' : String(value);
+  }
   function css(obj) {
     if (typeof obj === 'string') return obj;
     var out = '';
@@ -118,19 +121,20 @@
       var sp = this.jarStockStrength();
       var gPerL = isFinite(sp) ? this.fmt(sp * 10, 2) : '—';
       var powder = /^powder\b/i.test(jarProduct.form || '');
-      jarStockSteps.push('Weigh ' + gPerL + ' g of ' + jarProduct.name + ' then top up to 1 L final volume of stock (' + gPerL + ' g/L = ' + gPerL + ' mg/mL).');
+      jarStockSteps.push('Example only: Weigh ' + gPerL + ' g of ' + jarProduct.name + ' then top up to 1 L final volume of stock (' + gPerL + ' g/L = ' + gPerL + ' mg/mL).');
       // Chemical-specific mixing, dilution compatibility and maturation are not
       // established by a w/v arithmetic recipe. Never generalise polymer advice.
       jarStockSteps.push('Follow the supplier instructions and SDS for this specific chemical, including dilution compatibility, mixing order, maturation (if applicable) and PPE. No universal polymer procedure is assumed.');
-      jarStockSteps.push('1 mL of this stock added to a ' + (s.jarVol || '?') + ' mL jar ≈ ' + this.fmt(this.jarPpm('1'), 2) + ' mg/L dose.');
+      jarStockSteps.push('1 mL of this stock added to a ' + (s.jarVol || '?') + ' mL jar ≈ ' + (this.jarPreparationConfirmed() ? this.fmt(this.jarPpm('1'), 2) : '— (actual preparation unconfirmed)') + ' mg/L dose.');
     }
 
+    var preparationConfirmed = this.jarPreparationConfirmed();
     var jarRows = s.jars.map(function (j, i) {
-      var ppm = self.jarPpm(j.dose);
+      var ppm = preparationConfirmed ? self.jarPpm(j.dose) : NaN;
       var win = s.winner === i;
       return {
         i: i, n: i + 1, dose: j.dose, ph: j.ph, turb: j.turb, floc: j.floc,
-        ppm: isFinite(ppm) ? self.fmt(ppm, 2) : '—', finalPpm: self.fmt(self.jarFinalPpm(j.dose), 2),
+        ppm: isFinite(ppm) ? self.fmt(ppm, 2) : '—', finalPpm: preparationConfirmed ? self.fmt(self.jarFinalPpm(j.dose), 2) : '—',
         cardBg: win ? '#ECF7F3' : '#FFF',
         cardBorder: win ? '#087568' : '#E2DDD0',
         markColor: win ? '#087568' : '#B4BBB4',
@@ -138,7 +142,7 @@
       };
     });
     var winnerJar = (s.winner !== null && s.jars[s.winner]) ? s.jars[s.winner] : null;
-    var winnerPpmNum = winnerJar ? this.jarPpm(winnerJar.dose) : NaN;
+    var winnerPpmNum = winnerJar && preparationConfirmed ? this.jarPpm(winnerJar.dose) : NaN;
 
     var q = s.pumpQuery.trim().toLowerCase();
     var pumpRows = allPumps.filter(function (p) { return !q || (p.model + ' ' + p.brand + ' ' + p.type).toLowerCase().indexOf(q) >= 0; })
@@ -182,7 +186,7 @@
 
     var stockPctN = this.jarStockStrength();
     var stockPrep = isFinite(stockPctN) && stockPctN > 0 && stockPctN <= 100
-      ? 'To make this stock: dissolve ' + this.fmt(stockPctN * 10, 2) + ' g of as-supplied product, then top up to 1 L final volume (' + this.fmt(stockPctN * 10, 2) + ' g/L = ' + this.fmt(stockPctN * 10, 2) + ' mg/mL). Then 1 mL added to a ' + (s.jarVol || '?') + ' mL jar ≈ ' + this.fmt(this.jarPpm('1'), 2) + ' mg/L.'
+      ? 'Example w/v mass only (not supplier preparation instructions): ' + this.fmt(stockPctN * 10, 2) + ' g of as-supplied product, then top up to 1 L final volume (' + this.fmt(stockPctN * 10, 2) + ' g/L = ' + this.fmt(stockPctN * 10, 2) + ' mg/mL). Then 1 mL added to a ' + (s.jarVol || '?') + ' mL jar ≈ ' + (this.jarPreparationConfirmed() ? this.fmt(this.jarPpm('1'), 2) : '— (actual preparation unconfirmed)') + ' mg/L.'
       : 'Enter a stock strength to see the make-up quantity.';
 
     var cpFu = App.flowLabel(s.flowUnit);
@@ -275,11 +279,11 @@
       showSludgeConv: s.sludgeFlowUnit !== 'm3h' && isFinite(this.parseNum(s.sludgeFlow)),
       sludgeConverted: this.fmt(this.parseNum(s.sludgeFlow) * this.flowFactor(s.sludgeFlowUnit), 3),
       clientPreview: clientPreview,
-      jarTestRows: s.jarTests.map(function (t) {
+      jarTestRows: s.jarTests.filter(function (t) { return !s.jarHistoryClientId || t.clientId === s.jarHistoryClientId; }).map(function (t) {
         return {
-          id: t.id, date: t.date, who: t.clientName ? t.clientName : 'No client', product: t.productName,
-          winner: (t.winnerN ? ('Jar ' + t.winnerN + ' · ') : '') + (t.doseConvention === 'final-concentration-only-v1' ? t.winnerFinalMgL : t.winnerPpm) + ' mg/L' + (t.doseConvention === 'nominal-raw-sample-v1' ? ' nominal raw-sample dose' : (t.doseConvention === 'final-concentration-only-v1' ? ' final concentration (no raw-dose handoff)' : ' (historical convention; not reinterpreted)')),
-          setup: t.jarVol + ' mL jar · ' + t.stockPct + '% stock', note: t.note || ''
+          id: typeof t.id === 'string' ? t.id : '', date: t.date, who: t.clientName ? t.clientName : 'No client', product: t.productName,
+          winner: (t.winnerN !== null && t.winnerN !== undefined && t.winnerN !== '' ? ('Jar ' + t.winnerN + ' · ') : '') + rawHistorical(t.doseConvention === 'final-concentration-only-v1' ? t.winnerFinalMgL : t.winnerPpm) + ' mg/L' + (t.doseConvention === 'nominal-raw-sample-v1' ? ' nominal raw-sample dose' : (t.doseConvention === 'final-concentration-only-v1' ? ' final concentration (no raw-dose handoff)' : ' (historical convention; not reinterpreted)')),
+          setup: rawHistorical(t.jarVol) + ' mL jar · ' + rawHistorical(t.stockPct) + '% stock', note: t.note || ''
         };
       }),
       hasJarTests: s.jarTests.length > 0,
@@ -445,7 +449,7 @@
   }
   function productFormHtml(s) {
     var np = s.np;
-    return '<div style="margin-top:12px;background:#16211F;border-radius:16px;padding:16px;color:#EFECE3;">' +
+    return '<div class="fa-dark-form" style="margin-top:12px;background:#16211F;border-radius:16px;padding:16px;color:#EFECE3;">' +
       '<div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:#A6BEB3;font-weight:700;margin-bottom:12px;">New product</div>' +
       '<div style="display:flex;flex-direction:column;gap:9px;">' +
         (s.productSaveError ? '<div role="alert" style="color:#FF8A6B;">' + esc(s.productSaveError) + '</div>' : '') +
@@ -664,7 +668,7 @@
       stockBlock = '<div style="margin-top:12px;"><div style="font-size:11.5px;font-weight:600;color:#56635B;margin-bottom:6px;">Stock strength — ' + esc(v.jarProduct.name) + ' <span style="color:#526159;">(supplier make-down ' + esc(v.jarProduct.makedownText) + ')</span></div>' +
         '<div style="display:flex;gap:7px;flex-wrap:wrap;">' + v.stockOptions.map(function (o) { return '<button data-act="setStockStrength" data-v="' + esc(o.v) + '" style="' + o.style + '">' + esc(o.label) + '</button>'; }).join('') + '</div></div>' +
         '<div style="margin-top:12px;background:#16211F;border-radius:12px;padding:13px 14px;color:#EFECE3;">' +
-          '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4FE0B5" stroke-width="2"><path d="M9 2h6M8 2v6.5L4.5 16A3 3 0 0 0 7.2 20h9.6a3 3 0 0 0 2.7-3.5L16 8.5V2"/></svg><div style="font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#A6BEB3;font-weight:700;">How to make this stock</div></div>' +
+          '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4FE0B5" stroke-width="2"><path d="M9 2h6M8 2v6.5L4.5 16A3 3 0 0 0 7.2 20h9.6a3 3 0 0 0 2.7-3.5L16 8.5V2"/></svg><div style="font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#A6BEB3;font-weight:700;">Example stock arithmetic — not preparation evidence</div></div>' +
           '<ol style="margin:0;padding-left:17px;display:flex;flex-direction:column;gap:6px;">' + v.jarStockSteps.map(function (t) { return '<li style="font-size:12.8px;line-height:1.5;color:#DCE6E1;">' + esc(t) + '</li>'; }).join('') + '</ol></div>';
     }
     var jarRowsHtml = v.jarRows.map(function (j) {
@@ -691,20 +695,30 @@
         ? '<button data-act="useWinner" style="margin-top:12px;width:100%;border:none;cursor:pointer;background:#087568;color:#FFF;border-radius:12px;padding:13px;font-size:14.5px;font-weight:700;">Send this dose to the calculator →</button>'
         : '<div style="margin-top:12px;background:#202E2A;border:1px solid #35453F;border-radius:10px;padding:10px 12px;font-size:12px;color:#DCE6E1;line-height:1.5;"><b>' + esc(v.jarProduct.name) + '</b> has a dry-solids workflow entry basis (' + esc(v.jarProduct.entryDoseUnit || v.jarProduct.doseUnit || 'unknown') + '), not a confirmed supplier dose basis — a jar mg/L doesn’t convert to a plant dose without the solids balance. Use the sludge / mining playbook’s dry-solids tools instead.</div>') +
       '</div>' : '';
-    var jarSaveForm = s.showJarSave ? ('<div style="margin-top:12px;background:#16211F;border-radius:16px;padding:16px;color:#EFECE3;">' +
+    var jarSaveForm = s.showJarSave ? ('<div class="fa-dark-form" style="margin-top:12px;background:#16211F;border-radius:16px;padding:16px;color:#EFECE3;">' +
       '<div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:#A6BEB3;font-weight:700;margin-bottom:11px;">Save jar test</div>' +
-      '<div style="font-size:11.5px;font-weight:600;color:#9FB0AA;margin-bottom:5px;">Attach to client (optional)</div>' +
-      '<select data-set="jarSaveClient" data-key="jarSaveClient" style="width:100%;background:#202E2A;border:1px solid #35453F;border-radius:10px;padding:12px;font-size:14px;font-weight:600;color:#FFF;appearance:none;margin-bottom:9px;"><option value="">— no client —</option>' + v.clients.map(function (c) { return '<option value="' + esc(c.id) + '"' + (c.id === s.jarSaveClient ? ' selected' : '') + '>' + esc(c.name) + '</option>'; }).join('') + '</select>' +
+      '<label for="fa-jar-save-client" style="display:block;font-size:11.5px;font-weight:600;color:#9FB0AA;margin-bottom:5px;">Attach to client (optional)</label>' +
+      '<select id="fa-jar-save-client" data-set="jarSaveClient" data-key="jarSaveClient" style="width:100%;background:#202E2A;border:1px solid #35453F;border-radius:10px;padding:12px;font-size:14px;font-weight:600;color:#FFF;appearance:none;margin-bottom:9px;"><option value="">— no client —</option>' + v.clients.map(function (c) { return '<option value="' + esc(c.id) + '"' + (c.id === s.jarSaveClient ? ' selected' : '') + '>' + esc(c.name) + '</option>'; }).join('') + '</select>' +
       '<input data-set="jarSaveNote" data-key="jarSaveNote" value="' + esc(s.jarSaveNote) + '" placeholder="Note (e.g. raw water 45 NTU)" style="width:100%;background:#202E2A;border:1px solid #35453F;border-radius:10px;padding:12px;font-size:13.5px;color:#EFECE3;margin-bottom:11px;">' +
       '<div style="display:flex;gap:9px;"><button data-act="cancelJarSave" style="flex:1;border:1px solid #35453F;background:none;cursor:pointer;color:#9FB0AA;border-radius:11px;padding:12px;font-size:14px;font-weight:700;">Cancel</button><button data-act="confirmJarSave" style="flex:2;border:none;cursor:pointer;background:#087568;color:#FFF;border-radius:11px;padding:12px;font-size:14px;font-weight:700;">Save test</button></div></div>') : '';
     var jarSaved = s.jarSaved ? '<div style="margin-top:10px;background:#ECF7F3;border:1px solid #B8E0D3;border-radius:12px;padding:11px 13px;font-size:12.5px;color:#17564C;font-weight:600;">✓ Test saved to your history below.</div>' : '';
     var jarSaveErr = s.jarSaveError ? '<div style="margin-top:10px;background:#FBEBE7;border:1px solid #E9C4B9;border-radius:12px;padding:11px 13px;font-size:12.5px;color:#8A3A24;line-height:1.45;font-weight:600;">' + esc(s.jarSaveError) + '</div>' : '';
-    var historyHtml = v.hasJarTests ? ('<div style="margin-top:18px;display:flex;align-items:center;justify-content:space-between;"><div style="font-size:13px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:#56635B;">Test history</div><div style="font-size:11px;color:#526159;">newest first</div></div>' +
+    var historical = App.jarHistoryRecord(s.jarHistoryId);
+    function rawSaved(value) { return value === null || value === undefined || value === '' ? 'Unknown / not recorded' : String(value); }
+    var historyDetail = historical ? '<section data-jar-history-detail="' + esc(historical.id) + '" aria-label="Saved jar results" style="margin-top:14px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px;word-wrap:break-word;">' +
+      '<h3>Saved jar results — read only</h3><p>' + esc(rawSaved(historical.clientName)) + ' · ' + esc(rawSaved(historical.productName)) + ' · ' + esc(rawSaved(historical.date)) + '</p>' +
+      '<p>Recorded volume: ' + esc(rawSaved(historical.jarVol)) + ' mL; stock: ' + esc(rawSaved(historical.stockPct)) + '% w/v. Preparation confirmation: ' + esc(rawSaved(historical.stockPreparation)) + '. Volume basis: ' + esc(rawSaved(historical.jarVolumeBasis)) + '. Dose convention: ' + esc(rawSaved(historical.doseConvention)) + '.</p>' +
+      '<p>Historical values are not recalculated or certified. Missing preparation, units or conventions remain unknown; viewing does not authorize transfer.</p>' +
+      '<p>Saved winner: Jar ' + esc(rawSaved(historical.winnerN)) + '; ' + (historical.doseConvention === 'nominal-raw-sample-v1' ? 'recorded nominal dose: ' : 'recorded winner value (historical convention unknown unless stated above): ') + esc(rawSaved(historical.winnerPpm)) + ' mg/L; recorded final concentration: ' + esc(rawSaved(historical.winnerFinalMgL)) + ' mg/L.</p>' +
+      (Array.isArray(historical.jars) ? historical.jars : []).map(function (j, i) { j = j && typeof j === 'object' && !Array.isArray(j) ? j : {}; return '<div style="margin:10px 0;padding:10px;background:#F0F6F3;"><b>Jar ' + (i + 1) + '</b><dl><dt>Recorded stock addition (mL)</dt><dd>' + esc(rawSaved(j.dose)) + '</dd><dt>pH</dt><dd>' + esc(rawSaved(j.ph)) + '</dd><dt>Turbidity (NTU)</dt><dd>' + esc(rawSaved(j.turb)) + '</dd><dt>Floc</dt><dd>' + esc(rawSaved(j.floc)) + '</dd></dl></div>'; }).join('') +
+      '<p>Note: ' + esc(rawSaved(historical.note)) + '</p><button data-act="closeJarTest" style="min-height:44px;">Close saved jar results</button></section>' : (s.jarHistoryId !== null && s.jarHistoryId !== undefined ? '<p role="status">Saved jar view unavailable: identity is missing or ambiguous; select a unique stable ID. Original history is unchanged. <button data-act="closeJarTest" style="min-height:44px;">Close saved jar results</button></p>' : '');
+    var historyHtml = v.hasJarTests ? ('<div style="margin-top:18px;display:flex;align-items:center;justify-content:space-between;"><div style="font-size:13px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:#56635B;">Test history</div><div style="font-size:11px;color:#526159;">newest first</div></div>' + (s.jarHistoryClientId ? '<button data-act="showAllJarTests" style="min-height:44px;">Show all saved jar tests</button>' : '') +
       '<div style="margin-top:9px;display:flex;flex-direction:column;gap:9px;">' + v.jarTestRows.map(function (t) {
         return '<div style="background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:13px 14px;">' +
           '<div style="display:flex;justify-content:space-between;align-items:flex-start;"><div style="flex:1;min-width:0;"><div style="font-size:14.5px;font-weight:700;">' + esc(t.product) + '</div><div style="font-size:12px;color:#56635B;margin-top:1px;">' + esc(t.who) + ' · ' + esc(t.date) + '</div></div>' +
           '<button data-act="deleteJarTest" data-id="' + esc(t.id) + '" aria-label="Delete jar test for ' + esc(t.who) + '" style="border:none;background:none;cursor:pointer;min-width:44px;min-height:44px;flex-shrink:0;padding:10px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C0574A" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button></div>' +
           '<div style="margin-top:9px;display:flex;flex-wrap:wrap;gap:6px;"><div style="background:#16211F;color:#4FE0B5;border-radius:8px;padding:5px 9px;font-size:12px;font-weight:700;font-family:ui-monospace, SFMono-Regular, Consolas, monospace;">' + esc(t.winner) + '</div><div style="background:#F0F6F3;border-radius:8px;padding:5px 9px;font-size:12px;font-weight:600;color:#17564C;">' + esc(t.setup) + '</div></div>' +
+          '<button data-act="viewJarTest" data-id="' + esc(t.id) + '" aria-label="View saved jar results for ' + esc(t.who) + '" style="min-height:44px;margin-top:8px;">View saved jar results</button>' +
           (t.note ? '<div style="margin-top:8px;font-size:12.5px;color:#56635B;line-height:1.45;">' + esc(t.note) + '</div>' : '') + '</div>';
       }).join('') + '</div>') : '';
 
@@ -729,6 +743,7 @@
           '<div><div style="font-size:11.5px;font-weight:600;color:#56635B;margin-bottom:4px;">Jar volume (see basis below)</div><div style="position:relative;"><input inputmode="decimal" data-set="jarVol" data-key="jarVol" value="' + esc(s.jarVol) + '" style="width:100%;background:#FBF9F4;border:1px solid #D8D2C4;border-radius:10px;padding:11px 40px 11px 11px;font-size:15px;font-family:ui-monospace, SFMono-Regular, Consolas, monospace;font-weight:600;"><span style="position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:12px;color:#526159;font-weight:600;">mL</span></div></div>' +
           '<div><div style="font-size:11.5px;font-weight:600;color:#56635B;margin-bottom:4px;">Stock strength</div><div style="position:relative;"><input inputmode="decimal" data-set="stockPct" data-key="stockPct" value="' + esc(s.stockPct) + '" style="width:100%;background:#FBF9F4;border:1px solid #D8D2C4;border-radius:10px;padding:11px 32px 11px 11px;font-size:15px;font-family:ui-monospace, SFMono-Regular, Consolas, monospace;font-weight:600;"><span style="position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:12px;color:#526159;font-weight:600;">%</span></div></div>' +
         '</div>' +
+        '<p>' + (App.jarPreparationConfirmed() ? 'Actual preparation confirmed for this session.' : 'Preparation unconfirmed — numerical defaults and presets are examples, not actual preparation evidence.') + '</p><button data-act="confirmJarPreparation" style="min-height:44px;">Confirm actual prepared stock and sample basis</button>' +
         '<div style="margin-top:10px;background:#ECF7F3;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#17564C;line-height:1.5;">' + esc(v.stockPrep) + '</div>' +
         '<div style="margin-top:12px;"><div style="font-size:11.5px;font-weight:600;color:#56635B;margin-bottom:4px;">Optimisation retest — current full-scale dose</div>' +
           '<div style="display:flex;gap:8px;">' +
@@ -741,7 +756,7 @@
       '<div style="margin-top:11px;display:flex;gap:9px;"><button data-act="addJar" style="flex:1;border:1px solid #D8D2C4;background:#FFF;cursor:pointer;border-radius:11px;padding:11px;font-size:13.5px;font-weight:700;color:#16211F;">+ Add jar</button><button data-act="removeJar" style="flex:1;border:1px solid #D8D2C4;background:#FFF;cursor:pointer;border-radius:11px;padding:11px;font-size:13.5px;font-weight:700;color:#56635B;">– Remove last</button></div>' +
       winnerHtml + sourceInfo(v.jarProduct) +
       '<button data-act="startJarSave" style="margin-top:14px;width:100%;border:1px solid #087568;cursor:pointer;background:#FFF;color:#087568;border-radius:14px;padding:14px;font-size:15px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:8px;"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#087568" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>Save this test</button>' +
-      jarSaveForm + jarSaveErr + jarSaved + historyHtml +
+      jarSaveForm + jarSaveErr + jarSaved + historyHtml + historyDetail +
       '<div style="margin-top:14px;background:#FBF9F4;border:1px dashed #D8D2C4;border-radius:12px;padding:13px 14px;font-size:12.5px;color:#56635B;line-height:1.55;"><b style="color:#16211F;">Reading the test.</b> The best dose is usually the <i>lowest</i> one that gives clear water, fast-settling floc and stable pH — overdosing wastes product and can re-stabilise (re-suspend) the solids. Note floc as pinpoint / small / medium / large.</div>' +
     '</div>';
   };
@@ -757,8 +772,8 @@
       return '<div style="background:#FFF;border:1px solid #E2DDD0;border-radius:15px;padding:14px 15px;">' +
         '<div style="display:flex;justify-content:space-between;align-items:flex-start;"><div><div style="font-size:15.5px;font-weight:700;">' + esc(p.model) + ' ' + vbadge(p) + '</div><div style="font-size:12px;color:#56635B;">' + esc(p.brand) + ' · ' + esc(p.type) + '</div></div>' +
         '<div style="display:flex;align-items:center;gap:8px;"><div style="background:' + esc(p.tint) + ';color:' + esc(p.tintText === '#B05A28' ? '#8A451D' : p.tintText) + ';border-radius:8px;padding:4px 9px;font-size:11px;font-weight:700;font-family:ui-monospace, SFMono-Regular, Consolas, monospace;">' + esc(p.tag) + '</div>' + rm + '</div></div>' +
-        '<div style="margin-top:12px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">' + box('Max flow', p.maxFlow) + box('Max press', p.maxPress) +
-          '<div style="background:#F6F3EC;border-radius:9px;padding:8px 10px;"><div style="font-size:10px;color:#526159;font-weight:700;text-transform:uppercase;">Control</div><div style="font-size:13px;font-weight:700;margin-top:1px;">' + esc(p.control) + '</div></div></div>' +
+        '<div class="fa-pump-specs">' + box('Max flow', p.maxFlow) + box('Max press', p.maxPress) +
+          '<div class="fa-pump-control" style="background:#F6F3EC;border-radius:9px;padding:8px 10px;"><div style="font-size:10px;color:#526159;font-weight:700;text-transform:uppercase;">Control</div><div style="font-size:13px;font-weight:700;margin-top:1px;">' + esc(p.control) + '</div></div></div>' +
         (p.note ? '<div style="margin-top:9px;font-size:12.5px;color:#56635B;line-height:1.5;">' + esc(p.note) + '</div>' : '') + srcNote + aiNote + '</div>';
     }).join('');
     var noMatch = v.noPumpMatch ? ('<div style="margin-top:8px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:16px;text-align:center;"><div style="font-size:13px;color:#56635B;line-height:1.5;">Not in your local repository yet.</div>' +
@@ -780,7 +795,7 @@
   function pumpFormHtml(s) {
     var n = s.npu;
     function pf(dataf, val, ph, extra) { return '<input data-actinput="onNpuField" data-f="' + dataf + '" data-key="npu-' + dataf + '" value="' + esc(val) + '" placeholder="' + esc(ph) + '" style="' + (extra || 'width:100%;background:#202E2A;border:1px solid #35453F;border-radius:10px;padding:11px;font-size:13.5px;color:#EFECE3;') + '">'; }
-    return '<div style="margin-top:12px;background:#16211F;border-radius:16px;padding:16px;color:#EFECE3;">' +
+    return '<div class="fa-dark-form" style="margin-top:12px;background:#16211F;border-radius:16px;padding:16px;color:#EFECE3;">' +
       '<div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:#A6BEB3;font-weight:700;margin-bottom:12px;">New pump</div>' +
       '<div style="display:flex;flex-direction:column;gap:9px;">' +
         pf('model', n.model, 'Model (required)', 'width:100%;background:#202E2A;border:1px solid #35453F;border-radius:10px;padding:11px;font-size:14px;font-weight:600;color:#FFF;') +
@@ -833,7 +848,7 @@
 
   App.screens.clients = function (v) {
     var s = App.state;
-    var addForm = s.showClientForm ? ('<div style="margin-top:15px;background:#16211F;border-radius:16px;padding:16px 17px;color:#EFECE3;">' +
+    var addForm = s.showClientForm ? ('<div class="fa-dark-form" style="margin-top:15px;background:#16211F;border-radius:16px;padding:16px 17px;color:#EFECE3;">' +
       '<div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:#A6BEB3;font-weight:700;margin-bottom:11px;">New client from current calc</div>' +
       '<input data-set="clientName" data-key="clientName" value="' + esc(s.clientName) + '" placeholder="Client / company name" style="width:100%;background:#202E2A;border:1px solid #35453F;border-radius:11px;padding:12px;font-size:15px;font-weight:600;color:#FFF;margin-bottom:9px;">' +
       '<input data-set="clientSite" data-key="clientSite" value="' + esc(s.clientSite) + '" placeholder="Site / plant (optional)" style="width:100%;background:#202E2A;border:1px solid #35453F;border-radius:11px;padding:12px;font-size:14px;color:#EFECE3;margin-bottom:11px;">' +
@@ -841,7 +856,7 @@
       '<div style="display:flex;gap:9px;"><button data-act="cancelClient" style="flex:1;border:1px solid #35453F;background:none;cursor:pointer;color:#9FB0AA;border-radius:11px;padding:12px;font-size:14px;font-weight:700;">Cancel</button><button data-act="confirmClient" style="flex:2;border:none;cursor:pointer;background:#087568;color:#FFF;border-radius:11px;padding:12px;font-size:14px;font-weight:700;">Save client</button></div>' +
       (s.clientSaveError ? '<div style="margin-top:10px;background:#3A2320;border:1px solid #6B3A2E;border-radius:10px;padding:10px 12px;font-size:12px;color:#F0B7A8;line-height:1.45;font-weight:600;">' + esc(s.clientSaveError) + '</div>' : '') + '</div>') : '';
     var listHtml = v.hasClients ? ('<div style="margin-top:14px;display:flex;flex-direction:column;gap:10px;">' + v.clients.map(function (c) {
-      var testLine = c.hasTests ? '<div style="margin-top:8px;display:flex;align-items:center;gap:6px;font-size:12px;color:#087568;font-weight:600;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#087568" stroke-width="2"><path d="M9 2h6M8 2v6.5L4.5 16A3 3 0 0 0 7.2 20h9.6a3 3 0 0 0 2.7-3.5L16 8.5V2"/></svg>' + esc(c.testLabel) + '</div>' : '';
+      var testLine = c.hasTests ? '<div style="margin-top:8px;display:flex;align-items:center;gap:6px;font-size:12px;color:#087568;font-weight:600;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#087568" stroke-width="2"><path d="M9 2h6M8 2v6.5L4.5 16A3 3 0 0 0 7.2 20h9.6a3 3 0 0 0 2.7-3.5L16 8.5V2"/></svg>' + esc(c.testLabel) + '<button data-act="viewClientJarTests" data-id="' + esc(c.id) + '" aria-label="View saved jar tests for ' + esc(c.name) + '" style="min-height:44px;">View saved jar tests</button></div>' : '';
       var chipsLine = c.hasCalc ? '<div style="margin-top:11px;display:flex;flex-wrap:wrap;gap:6px;"><div style="background:#F0F6F3;border-radius:8px;padding:5px 9px;font-size:12px;font-weight:600;color:#17564C;">' + esc(c.chip1) + '</div><div style="background:#F0F6F3;border-radius:8px;padding:5px 9px;font-size:12px;font-weight:600;color:#17564C;">' + esc(c.chip2) + '</div><div style="background:#F0F6F3;border-radius:8px;padding:5px 9px;font-size:12px;font-weight:600;color:#17564C;">' + esc(c.chip3) + '</div></div>' : '';
       var readingsLine = c.nReadings ? ('<details open style="margin-top:9px;"><summary style="padding:12px;cursor:pointer;">View all ' + c.nReadings + ' saved reading/programme sets</summary><div style="display:flex;flex-direction:column;gap:5px;">' + c.readings.map(function (r, i) {
         return '<div style="background:#FBF9F4;border:1px solid #EFEBE2;border-radius:9px;padding:7px 10px;font-size:11.5px;color:#4B564F;line-height:1.45;"><span style="font-family:ui-monospace, SFMono-Regular, Consolas, monospace;font-weight:600;color:#087568;">☰</span> ' + esc(r) + (c.readingRecords[i].id && c.readingRecords[i].playbookId && c.readingRecords[i].readingInputs ? '<button data-act="recallGuideReading" data-client-id="' + esc(c.id) + '" data-reading-id="' + esc(c.readingRecords[i].id) + '" style="display:block;width:100%;min-height:44px;margin-top:8px;padding:10px;">Recall this saved reading / programme</button>' : '<div>Historical record retained; full recall unavailable (stable identity/context not recorded).</div>') + '</div>';
@@ -1237,6 +1252,35 @@
     });
   };
 
+  // Keep native select semantics/pickers; expose full chosen wording beside the
+  // single-line native face. Never abbreviate provenance or unknown-basis options.
+  App.styleNativeControls = function () {
+    var screen = this.$screen;
+    Array.prototype.forEach.call(screen.querySelectorAll('select'), function (el, i) {
+      el.classList.add('fa-native-select');
+      var key = el.getAttribute('data-key') || '', embedded = ['flowUnit', 'sludgeFlowUnit', 'guideProgDoseUnit', 'guideProgFlowUnit'].indexOf(key) >= 0;
+      var needsContext = Array.prototype.some.call(el.options, function (o) { return o.text.length > 8; });
+      if (!needsContext) return;
+      if (el.labels && el.labels.length && !el.getAttribute('aria-label') && !el.getAttribute('aria-labelledby')) {
+        // Only the visible label caption names the control. Options and the
+        // adjacent selected-value description must never become its name.
+        var caption = el.labels[0].cloneNode(true);
+        Array.prototype.forEach.call(caption.querySelectorAll('select, input, textarea, .fa-selected-value'), function (child) { child.parentNode.removeChild(child); });
+        el.setAttribute('aria-label', caption.textContent.trim());
+      }
+      var context = document.createElement('span');
+      context.className = 'fa-selected-value'; context.id = 'fa-selected-' + i;
+      context.textContent = 'Selected: ' + (el.selectedIndex >= 0 ? el.options[el.selectedIndex].text : 'Unknown / not selected');
+      el.setAttribute('aria-describedby', context.id);
+      if (embedded) {
+        el.parentNode.parentNode.insertBefore(context, el.parentNode.nextSibling);
+      } else {
+        var wrap = document.createElement('span'); wrap.className = 'fa-select-field';
+        el.parentNode.insertBefore(wrap, el); wrap.appendChild(el); wrap.appendChild(context);
+      }
+    });
+  };
+
   App.render = function () {
     if (this._composing) return; // Never detach the active IME composition node.
     var v = this.derive();
@@ -1269,6 +1313,7 @@
       (v.isClients ? '' : '<button data-act="goClients" style="display:block;margin-top:8px;min-height:44px;padding:10px;cursor:pointer;">Open original recovery backup</button>') + '</div>' + html;
     this.$screen.innerHTML = html;
     this.labelControls();
+    this.styleNativeControls();
     this.$nav.innerHTML = this.renderNav(v);
 
     // restore
