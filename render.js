@@ -55,24 +55,51 @@
   }
 
 
-  function sourceInfo(p) {
+  // Collapsed-by-default disclosure for the plain notices below ("Why?", "Source details"). Same pattern as the
+  // Clients restore / Calculator Advanced toggles: a real button with aria-expanded + aria-controls, the panel is in
+  // the DOM and AX tree only while expanded, and the open state is view-only (App.state.noticeOpen, never saved).
+  // Typography comes from classes (fa-btn button, role="note" text): no inline font sizes or colours.
+  function noticeDomId(key) {
+    return 'fa-notice-' + String(key).replace(/[^A-Za-z0-9-]/g, function (c) { return '_' + c.charCodeAt(0).toString(16) + '_'; });
+  }
+  function noticeDisclosure(key, label, bodyHtml) {
+    var map = App.state.noticeOpen || {};
+    var open = Object.prototype.hasOwnProperty.call(map, key) && map[key] === true;
+    var id = noticeDomId(key);
+    return '<button type="button" class="fa-btn" data-act="toggleNotice" data-notice="' + esc(key) + '" aria-expanded="' + (open ? 'true' : 'false') + '" aria-controls="' + id + '" style="margin-top:6px;border-style:dashed;display:inline-flex;align-items:center;gap:6px;">' + esc(label) +
+      '<svg aria-hidden="true" width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" style="transform:rotate(' + (open ? '180' : '0') + 'deg);"><path d="M2 3l3 3 3-3"/></svg></button>' +
+      (open ? '<div id="' + id + '" role="note" data-notice-panel style="margin-top:6px;">' + bodyHtml + '</div>' : '');
+  }
+
+  // Source scope: a one-statement summary that always keeps "not a dosing approval" visible, with every original
+  // detail line (unchanged) one tap away in "Source details". opts.key names the disclosure; opts.sourceShown is set
+  // where the caller already prints a "Source: ..." line just above (product detail, pump rows).
+  function sourceInfo(p, opts) {
     if (!p || !p.id) return '';
+    opts = opts || {};
     var userEntry = p.custom || p.mine || App.state.customProducts.indexOf(p) >= 0 || App.state.foundPumps.indexOf(p) >= 0;
-    if (userEntry) return '<div role="note" style="margin-top:10px;padding:12px;border:1px dashed #D8D2C4;">User-declared values and supplied document references are not supplier-certified. Current operational approval: unconfirmed. Confirm model/grade and duty independently.</div>';
-    var pairs = (Array.isArray(p.capacityPairs) ? p.capacityPairs : []).filter(function (x) { return x && typeof x === 'object'; }).map(function (x) {
-      return x.model + ': ' + (x.injectionMaxLh != null ? 'injection max ' + x.injectionMaxLh + ' L/h, depends on motive flow / ratio' : x.flowLh + ' L/h at ' + x.pressureBar + ' bar, ' + x.frequencyHz + ' Hz' + (x.head ? ', ' + x.head + ' head' : ''));
-    }).join('; ');
-    return '<div role="note" style="margin-top:10px;padding:12px;border:1px dashed #D8D2C4;border-radius:10px;font-size:12px;color:#4B564F;">' +
-      '<b>Source scope, not dosing approval.</b> ' + esc(p.sourceCaution || (p.custom || p.mine ? 'User-declared values, not supplier-certified.' : 'Current source and field approval unconfirmed.')) +
-      '<div>Extraction confidence: ' + esc(p.extractionConfidence || 'not recorded') + '; current operational approval: ' + esc(p.operationalApproval || 'unconfirmed') + '.</div>' +
-      (p.sourceDocumentCode ? '<div>Document: ' + esc(p.sourceDocumentCode) + '</div>' : '<div>Dedicated document code: not recorded.</div>') +
-      (p.retrievedDate ? '<div>Source retrieved: ' + esc(p.retrievedDate) + '</div>' : '') +
-      (pairs ? '<div>Paired source ratings (not selected operating duty): ' + esc(pairs) + '</div>' : '') +
-      (p.motiveWaterFlow ? '<div>Motive-water throughput only: ' + esc(p.motiveWaterFlow) + '</div>' : '') +
-      (p.entryDoseUnit ? '<div>Workflow entry unit only: ' + esc(p.entryDoseUnit) + '. ' + esc(p.entryDoseNote) + '</div>' : '') +
-      (Array.isArray(p.doseWindows) ? p.doseWindows.filter(function (w) { return w && typeof w === 'object'; }).map(function (w) { return '<div>Source-window context: ' + esc(w.application) + '; purpose: ' + esc(w.purpose) + '; species/formulation: ' + esc(w.chemicalSpecies) + '; mass basis: ' + esc(w.massBasis) + '; source kind: ' + esc(w.sourceKind) + '; units: ' + esc(w.unit) + '; approval: ' + esc(w.approval) + '.</div>'; }).join('') : '') +
-      (p.doseSourceQuote ? '<div>Source dose quote (historical): ' + esc(p.doseSourceQuote) + '</div>' : '') +
-      (p.fieldEvidence ? '<div>Field evidence: ' + Object.keys(p.fieldEvidence).map(function (key) { return esc(key) + ': ' + esc(p.fieldEvidence[key]); }).join('; ') + '</div>' : '') + '</div>';
+    var summary, details;
+    if (userEntry) {
+      summary = 'Your own entry · not supplier-certified or a dosing approval';
+      details = 'User-declared values and supplied document references are not supplier-certified. Current operational approval: unconfirmed. Confirm model/grade and duty independently.';
+    } else {
+      var pairs = (Array.isArray(p.capacityPairs) ? p.capacityPairs : []).filter(function (x) { return x && typeof x === 'object'; }).map(function (x) {
+        return x.model + ': ' + (x.injectionMaxLh != null ? 'injection max ' + x.injectionMaxLh + ' L/h, depends on motive flow / ratio' : x.flowLh + ' L/h at ' + x.pressureBar + ' bar, ' + x.frequencyHz + ' Hz' + (x.head ? ', ' + x.head + ' head' : ''));
+      }).join('; ');
+      summary = (opts.sourceShown ? 'Source scope only' : (p.source ? 'Source: ' + esc(p.source) : (p.sourceDocumentCode ? 'Source: ' + esc(p.sourceDocumentCode) : 'Source not recorded'))) + ' · not a dosing approval';
+      details = '<b>Source scope, not dosing approval.</b> ' + esc(p.sourceCaution || (p.custom || p.mine ? 'User-declared values, not supplier-certified.' : 'Current source and field approval unconfirmed.')) +
+        '<div>Extraction confidence: ' + esc(p.extractionConfidence || 'not recorded') + '; current operational approval: ' + esc(p.operationalApproval || 'unconfirmed') + '.</div>' +
+        (p.sourceDocumentCode ? '<div>Document: ' + esc(p.sourceDocumentCode) + '</div>' : '<div>Dedicated document code: not recorded.</div>') +
+        (p.retrievedDate ? '<div>Source retrieved: ' + esc(p.retrievedDate) + '</div>' : '') +
+        (pairs ? '<div>Paired source ratings (not selected operating duty): ' + esc(pairs) + '</div>' : '') +
+        (p.motiveWaterFlow ? '<div>Motive-water throughput only: ' + esc(p.motiveWaterFlow) + '</div>' : '') +
+        (p.entryDoseUnit ? '<div>Workflow entry unit only: ' + esc(p.entryDoseUnit) + '. ' + esc(p.entryDoseNote) + '</div>' : '') +
+        (Array.isArray(p.doseWindows) ? p.doseWindows.filter(function (w) { return w && typeof w === 'object'; }).map(function (w) { return '<div>Source-window context: ' + esc(w.application) + '; purpose: ' + esc(w.purpose) + '; species/formulation: ' + esc(w.chemicalSpecies) + '; mass basis: ' + esc(w.massBasis) + '; source kind: ' + esc(w.sourceKind) + '; units: ' + esc(w.unit) + '; approval: ' + esc(w.approval) + '.</div>'; }).join('') : '') +
+        (p.doseSourceQuote ? '<div>Source dose quote (historical): ' + esc(p.doseSourceQuote) + '</div>' : '') +
+        (p.fieldEvidence ? '<div>Field evidence: ' + Object.keys(p.fieldEvidence).map(function (key) { return esc(key) + ': ' + esc(p.fieldEvidence[key]); }).join('; ') + '</div>' : '');
+    }
+    return '<div data-source-info style="margin-top:10px;"><div role="note" class="fa-help" data-source-summary>' + summary + '</div>' +
+      noticeDisclosure(opts.key || 'source', 'Source details', details) + '</div>';
   }
 
   // one predicate for every product picker — search behaviour can't diverge
@@ -312,19 +339,32 @@
   // One banner for every dose-vs-datasheet-window verdict (calc + guide) — the
   // wording, colours and the datasheet-basis footer can never drift apart.
   // `w` is a doseWindowFor result, or {mismatch:true, name, rawUnit, note}.
-  function doseWindowBanner(w, subject) {
+  // opts: key (disclosure name prefix), value (entered dose already formatted with
+  // its unit, or ''), entry (the abstention comes from an incomplete programme
+  // entry, not the product), entryReasonVisible (keep that reason on screen).
+  // An abstention is a calm 1-2 line helper note — no range and no recommendation
+  // are shown; the full original reason is one tap away behind "Why?".
+  function doseWindowBanner(w, subject, opts) {
     if (!w) return '';
-    if (w.abstain) return '<div role="status" class="fa-note-text" style="margin-top:10px;padding:12px;border:1px dashed #D8D2C4;border-radius:10px;"><b>Window not checked — no dosing recommendation.</b> ' + esc(w.reason) + ' Recorded range: ' + esc(w.raw) + '; unit: ' + esc(w.rawUnit) + '. ' + esc(w.note) + '</div>';
+    opts = opts || {};
+    if (w.abstain) {
+      var name = esc(w.name || 'this product'), dose = opts.value ? esc(opts.value) : 'the dose', headline;
+      if (opts.entry) headline = opts.entryReasonVisible ? esc(w.reason) + ' Not compared with a source range; not dosing advice.' : 'Not compared with a source range until the programme dose, unit and as-supplied basis are confirmed. Not dosing advice.';
+      else if (!w.raw || /^[\s\u2014\u2013-]*$/.test(String(w.raw))) headline = 'No supplier dose range on file for ' + name + ', so ' + dose + ' isn\u2019t compared. Not dosing advice.';
+      else headline = 'The recorded dose range for ' + name + ' can\u2019t be compared with ' + dose + '. Not dosing advice.';
+      return '<div data-dose-notice style="margin-top:10px;"><div role="note" class="fa-help" data-dose-notice-text>' + headline + '</div>' +
+        noticeDisclosure((opts.key || 'dose') + '-why', 'Why?', '<b>Window not checked — no dosing recommendation.</b> ' + esc(w.reason) + ' Recorded range: ' + esc(w.raw) + '; unit: ' + esc(w.rawUnit) + '. ' + esc(w.note)) + '</div>';
+    }
     var label = { 'supplier-tds': 'supplier operational range', 'published-reference': 'published reference window', 'site-test': 'site-validated test range' }[w.sourceKind] || 'unknown source window';
-    var noteLine = w.note ? '<div style="margin-top:6px;font-size:12px;opacity:.8;">Source window basis: ' + esc(w.note) + '</div>' : '';
+    var noteLine = w.note ? '<div class="fa-help" style="margin-top:6px;">Source window basis: ' + esc(w.note) + '</div>' : '';
     if (w.mismatch) {
-      return '<div style="margin-top:10px;background:#FBF9F4;border:1px dashed #D8D2C4;border-radius:10px;padding:9px 12px;font-size:12px;color:#526159;">' +
+      return '<div role="note" data-dose-window style="margin-top:10px;background:#FBF9F4;border:1px dashed #D8D2C4;border-radius:10px;padding:9px 12px;">' +
         subject + ' doesn’t match <b>' + esc(w.name) + '</b>’s source window basis (' + esc(w.rawUnit || '') + ') — no window comparison shown.' + noteLine + '</div>';
     }
     var ok = w.status === 'within';
     var msg = 'is <b>' + esc(w.status) + '</b> this ' + label + '. This is a reference comparison, not a proven optimum, safe dose or instruction to change dosing. Confirm by jar and plant testing.';
     var shown = App.fmt(w.val, 2) + ' ' + w.unit + (w.converted ? ' equivalent' : '');
-    return '<div style="margin-top:10px;background:' + (ok ? '#ECF7F3' : '#FBF6EC') + ';border:1px solid ' + (ok ? '#B8E0D3' : '#EBD9BC') + ';border-radius:12px;padding:11px 13px;font-size:12px;color:' + (ok ? '#17564C' : '#6B5A38') + ';">' +
+    return '<div role="note" data-dose-window style="margin-top:10px;background:' + (ok ? '#ECF7F3' : '#FBF6EC') + ';border:1px solid ' + (ok ? '#B8E0D3' : '#EBD9BC') + ';border-radius:12px;padding:11px 13px;">' +
       '<b>' + esc(w.name) + '</b> — ' + label + ' <b style="font-family:ui-monospace, SFMono-Regular, Consolas, monospace;">' + w.lo + '–' + w.hi + ' ' + w.unit + '</b>. ' + subject + ' (' + esc(shown) + ') ' + msg + noteLine + '</div>';
   }
 
@@ -526,7 +566,7 @@
         '<div style="font-size:14px;color:#5C4A24;">' + esc(p.makeup) + '</div></div>' +
       '<div style="margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:9px;">' +
         statCard('Make-down strength', p.makedownText, true) + statCard('Ageing / maturation', p.ageing) +
-      '</div>' + srcLine + sourceInfo(p) +
+      '</div>' + srcLine + sourceInfo(p, { key: 'product-source', sourceShown: !!p.source }) +
       '<button data-act="useProductInCalc" style="margin-top:18px;width:100%;border:none;cursor:pointer;background:#087568;color:#FFF;border-radius:14px;padding:15px;font-size:16px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:8px;">' +
         '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FFF" stroke-width="2"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M8 6h8M8 10h8M8 14h3M15 14v4"/></svg>Use in dosing calculator</button>' +
       deleteBtn +
@@ -542,6 +582,9 @@
     var concInputs = v.isConcMode !== undefined ? '' : '';
     var isConc = s.calcMode === 'conc';
     var isSludge = s.calcMode === 'sludge';
+    // The entered dose echoed in the plain window notice (display only; the app's formatter, its own unit).
+    var enteredDoseNum = App.parseNum(isConc ? s.dose : s.doseKg);
+    var enteredDoseText = isFinite(enteredDoseNum) && enteredDoseNum > 0 ? App.fmt(enteredDoseNum) + ' ' + (isConc ? 'mg/L' : 'kg/t DS') : '';
     var concBlock = isConc ? (
       '<div style="margin-top:12px;display:flex;flex-direction:column;gap:10px;">' +
         '<div><div style="font-size:12px;font-weight:700;color:#4B564F;margin-bottom:5px;">Flow rate</div>' +
@@ -594,9 +637,16 @@
         '<div style="font-family:ui-monospace, SFMono-Regular, Consolas, monospace;font-size:24px;line-height:1.25;font-weight:600;color:' + color + ';letter-spacing:-0.01em;">' + esc(val) + '</div>' +
         '<div style="font-size:12px;color:#9FB0AA;">' + sub + '</div></div>';
     }
-    var warnHtml = c.hasWarn ? '<div style="margin-top:12px;display:flex;flex-direction:column;gap:8px;">' + c.warnings.map(function (w) {
-      return '<div style="background:' + w.bg + ';border:1px solid ' + w.border + ';border-radius:12px;padding:11px 13px;font-size:14px;color:' + w.color + ';">' + esc(w.text) + '</div>';
+    // Dose warning stack on the app's alert/note classes (same computed styles as the Calculator stacks): red only for
+    // entered values that cannot be used, amber for genuine cautions, neutral helper text for fields not yet entered.
+    var warnHtml = c.hasWarn ? '<div data-calc-warnings style="margin-top:12px;display:flex;flex-direction:column;gap:8px;">' + c.warnings.map(function (w) {
+      if (w.kind === 'prompt') return '<div role="note" class="fa-help">' + esc(w.text) + '</div>';
+      if (w.kind === 'error') return '<div role="alert" class="fa-note fa-note-error">' + esc(w.text) + '</div>';
+      return '<div role="status" class="fa-note">' + esc(w.text) + '</div>';
     }).join('') + '</div>' : '';
+    // Pump feed caption: never "% w/v solution" around a blank or unusable strength.
+    var feedSub = s.feedBasis === 'neat' ? c.pumpUnitLabel + ' neat as-supplied product' :
+      (c.strengthStatus === 'empty' ? c.pumpUnitLabel + ' of solution (enter strength)' : (c.strengthStatus === 'invalid' ? c.pumpUnitLabel + ' of solution (check strength)' : c.pumpUnitLabel + ' of ' + esc(s.makedown) + '% w/v solution'));
     var cal = v.cal;
     var calAdvice = cal.showAdvice ? '<div style="margin-top:11px;background:#ECF7F3;border-radius:10px;padding:10px 12px;font-size:12px;color:#17564C;">' + esc(cal.advice) + '</div>' : '';
 
@@ -616,7 +666,7 @@
         }) + '</div>' +
       concBlock + sludgeBlock +
       (s.calcHandoffNote ? '<div role="alert" class="fa-note" style="margin-top:12px;">' + esc(s.calcHandoffNote) + '</div>' : '') +
-      doseWindowBanner(v.doseWin, v.doseWin && v.doseWin.mismatch ? 'The ' + (isConc ? 'mg/L' : 'kg/t DS') + ' entry' : 'The entered dose') + sourceInfo(v.allProducts.find(function (p) { return p.id === s.calcProductId; })) +
+      doseWindowBanner(v.doseWin, v.doseWin && v.doseWin.mismatch ? 'The ' + (isConc ? 'mg/L' : 'kg/t DS') + ' entry' : 'The entered dose', { key: 'calc', value: enteredDoseText }) + sourceInfo(v.allProducts.find(function (p) { return p.id === s.calcProductId; }), { key: 'calc-source' }) +
       '<div style="margin-top:14px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
         '<div style="font-size:12px;font-weight:700;color:#4B564F;margin-bottom:10px;">Feed preparation</div>' +
         '<label>Feed basis <select data-set="feedBasis" data-key="feedBasis"><option value="solution"' + (s.feedBasis !== 'neat' ? ' selected' : '') + '>Made-up solution (% w/v product)</option><option value="neat"' + (s.feedBasis === 'neat' ? ' selected' : '') + '>Neat liquid (use product density)</option></select></label>' +
@@ -639,7 +689,7 @@
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;"><div style="font-size:12px;letter-spacing:0.12em;text-transform:uppercase;color:#A6BEB3;font-weight:700;">Results</div><div style="width:8px;height:8px;border-radius:50%;background:' + c.statusDot + ';"></div></div>' +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px 12px;">' +
           resCell('Neat product', c.massKgH, '#4FE0B5', 'kg/h &nbsp;·&nbsp; ' + esc(c.massKgDay) + ' kg/day') +
-          resCell('Pump feed', c.solPumpText, '#4FE0B5', s.feedBasis === 'neat' ? c.pumpUnitLabel + ' neat as-supplied product' : c.pumpUnitLabel + ' of ' + esc(s.makedown) + '% w/v solution') +
+          resCell('Pump feed', c.solPumpText, '#4FE0B5', feedSub) +
           resCell('Pump stroke', c.strokePct, c.strokeColor, '% of max capacity') +
           resCell('Neat volume', c.neatPumpText, '#4FE0B5', c.pumpUnitLabel + ' before dilution') +
         '</div>' +
@@ -772,7 +822,7 @@
       '<div style="margin-top:15px;display:flex;align-items:center;justify-content:space-between;"><div style="font-size:14px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:#56635B;">Jars</div><div style="font-size:12px;color:#526159;">tap ◎ to mark the winner</div></div>' +
       '<div style="margin-top:9px;display:flex;flex-direction:column;gap:10px;">' + jarRowsHtml + '</div>' +
       '<div style="margin-top:11px;display:flex;gap:9px;"><button data-act="addJar" style="flex:1;border:1px solid #D8D2C4;background:#FFF;cursor:pointer;border-radius:11px;padding:11px;font-size:14px;font-weight:700;color:#16211F;">+ Add jar</button><button data-act="removeJar" style="flex:1;border:1px solid #D8D2C4;background:#FFF;cursor:pointer;border-radius:11px;padding:11px;font-size:14px;font-weight:700;color:#56635B;">– Remove last</button></div>' +
-      winnerHtml + sourceInfo(v.jarProduct) +
+      winnerHtml + sourceInfo(v.jarProduct, { key: 'jars-source' }) +
       '<button data-act="startJarSave" style="margin-top:14px;width:100%;border:1px solid #087568;cursor:pointer;background:#FFF;color:#087568;border-radius:14px;padding:14px;font-size:16px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:8px;"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#087568" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>Save this test</button>' +
       jarSaveForm + jarSaveErr + jarSaved + historyHtml + historyDetail +
       '<div style="margin-top:14px;background:#FBF9F4;border:1px dashed #D8D2C4;border-radius:12px;padding:13px 14px;font-size:12px;color:#56635B;"><b style="color:#16211F;">Reading the test.</b> The best dose is usually the <i>lowest</i> one that gives clear water, fast-settling floc and stable pH — overdosing wastes product and can re-stabilise (re-suspend) the solids. Note floc as pinpoint / small / medium / large.</div>' +
@@ -786,7 +836,7 @@
       var rm = p.removable ? '<button data-act="removePump" data-id="' + esc(p.id) + '" aria-label="Delete pump ' + esc(p.model) + '" style="border:none;background:none;cursor:pointer;min-width:44px;min-height:44px;flex-shrink:0;padding:10px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C0574A" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>' : '';
       function box(label, val, cls) { return '<div' + (cls ? ' class="' + cls + '"' : '') + ' style="background:#F6F3EC;border-radius:9px;padding:8px 10px;"><div style="font-size:12px;color:#526159;font-weight:700;text-transform:uppercase;">' + label + '</div><div style="font-size:14px;font-weight:700;font-family:ui-monospace, SFMono-Regular, Consolas, monospace;margin-top:1px;">' + esc(val) + '</div></div>'; }
       var aiNote = p.ai ? '<div style="margin-top:9px;background:#F3EFFA;border:1px solid #DDD1F0;border-radius:9px;padding:8px 11px;font-size:12px;color:#6A4CA0;">AI-retrieved from model knowledge — <b>verify against the official datasheet</b> before sizing a pump on these figures.</div>' : '';
-      var srcNote = (p.source && !p.ai) ? '<div style="margin-top:8px;font-size:12px;color:#526159;overflow-wrap:break-word;word-wrap:break-word;">Source: ' + esc(p.source) + '</div>' + sourceInfo(p) : sourceInfo(p);
+      var srcNote = (p.source && !p.ai) ? '<div style="margin-top:8px;font-size:12px;color:#526159;overflow-wrap:break-word;word-wrap:break-word;">Source: ' + esc(p.source) + '</div>' + sourceInfo(p, { key: 'pump-source:' + p.id, sourceShown: true }) : sourceInfo(p, { key: 'pump-source:' + p.id });
       return '<div style="background:#FFF;border:1px solid #E2DDD0;border-radius:15px;padding:14px 15px;">' +
         '<div style="display:flex;justify-content:space-between;align-items:flex-start;"><div><div style="font-size:16px;font-weight:700;">' + esc(p.model) + ' ' + vbadge(p) + '</div><div style="font-size:12px;color:#56635B;">' + esc(p.brand) + ' · ' + esc(p.type) + '</div></div>' +
         '<div style="display:flex;align-items:center;gap:8px;"><div style="background:' + esc(p.tint) + ';color:' + esc(p.tintText === '#B05A28' ? '#8A451D' : p.tintText) + ';border-radius:8px;padding:4px 9px;font-size:12px;font-weight:700;font-family:ui-monospace, SFMono-Regular, Consolas, monospace;">' + esc(p.tag) + '</div>' + rm + '</div></div>' +
@@ -1069,9 +1119,16 @@
         (['mgL','kgt','gt'].indexOf(s.guideProgDoseUnit) < 0 ? '<option value="" selected>Confirm unit</option>' : '') + optionTags(App.DOSE_UNITS, s.guideProgDoseUnit, 'v', 'label') + '</select>';
       var flowSel = '<select data-actchange="onGuideProgSelect" data-f="guideProgFlowUnit" data-key="guideProgFlowUnit" style="border:none;border-left:1px solid #E2DDD0;background:#F6F3EC;padding:0 26px 0 10px;font-size:12px;font-weight:700;color:#4B564F;appearance:none;cursor:pointer;background-image:' + DOWNARROW + ';background-repeat:no-repeat;background-position:right 9px center;">' +
         (!isFinite(App.flowFactor(s.guideProgFlowUnit)) ? '<option value="" selected>Confirm unit</option>' : '') + optionTags(App.FLOW_UNITS, s.guideProgFlowUnit, 'v', 'label') + '</select>';
-      var winHtml = sourceInfo(prog.product);
+      var winHtml = sourceInfo(prog.product, { key: 'guide-source' });
       if (prog.win) {
-        winHtml += doseWindowBanner(prog.win, 'Their rate');
+        // Display only: an abstention that is not the product's own (doseAbstention) comes from the programme entry.
+        var productAbstain = prog.product ? App.doseAbstention(prog.product, s.guideId) : null;
+        var entryAbstain = !!prog.win.abstain && !(productAbstain && productAbstain.reason === prog.win.reason && productAbstain.raw === prog.win.raw);
+        var progDose = App.programmeDose(s.guideProgDose);
+        winHtml += doseWindowBanner(prog.win, 'Their rate', {
+          key: 'guide', entry: entryAbstain, entryReasonVisible: entryAbstain && !!s.guideProgRestoreError,
+          value: progDose ? (progDose.range ? 'their rate' : App.fmt(progDose.lo) + ' ' + App.doseUnitLabel(s.guideProgDoseUnit)) : ''
+        });
       } else if (prog.unitMismatch) {
         winHtml += doseWindowBanner({
           mismatch: true, name: (prog.product || {}).name || '',
@@ -1107,7 +1164,7 @@
             '<div style="display:flex;border:1px solid #D8D2C4;border-radius:10px;background:#FBF9F4;overflow:hidden;"><input inputmode="decimal" data-actinput="onGuideProgField" data-f="guideProgDose" data-key="guideProgDose" value="' + esc(s.guideProgDose) + '" placeholder="—" style="flex:1;min-width:0;border:none;background:transparent;padding:11px;font-size:16px;font-family:ui-monospace, SFMono-Regular, Consolas, monospace;font-weight:600;">' + unitSel + '</div></div>' +
           '<div><div style="font-size:12px;font-weight:700;color:#4B564F;margin-bottom:4px;">Plant / feed flow</div>' +
             '<div style="display:flex;border:1px solid #D8D2C4;border-radius:10px;background:#FBF9F4;overflow:hidden;"><input inputmode="decimal" data-actinput="onGuideProgField" data-f="guideProgFlow" data-key="guideProgFlow" value="' + esc(s.guideProgFlow) + '" placeholder="—" style="flex:1;min-width:0;border:none;background:transparent;padding:11px;font-size:16px;font-family:ui-monospace, SFMono-Regular, Consolas, monospace;font-weight:600;">' + flowSel + '</div></div>' +
-        '</div>' + (s.guideProgDoseUnit === 'kgt' || s.guideProgDoseUnit === 'gt' ? '<div style="margin-top:10px;display:grid;gap:8px;"><label>Slurry density (kg/L; explicit measured value)<input inputmode="decimal" data-actinput="onGuideProgField" data-f="guideProgSludgeDensity" data-key="guideProgSludgeDensity" value="' + esc(s.guideProgSludgeDensity) + '" style="width:100%;padding:11px;font-size:16px;"></label><label>Dry solids (% w/w; explicit measured value)<input inputmode="decimal" data-actinput="onGuideProgField" data-f="guideProgDs" data-key="guideProgDs" value="' + esc(s.guideProgDs) + '" style="width:100%;padding:11px;font-size:16px;"></label></div>' : '') + winHtml + (prog.rangeWin ? doseWindowBanner(prog.rangeWin, 'Upper endpoint') : '') + consHtml + progBtns + '</div>';
+        '</div>' + (s.guideProgDoseUnit === 'kgt' || s.guideProgDoseUnit === 'gt' ? '<div style="margin-top:10px;display:grid;gap:8px;"><label>Slurry density (kg/L; explicit measured value)<input inputmode="decimal" data-actinput="onGuideProgField" data-f="guideProgSludgeDensity" data-key="guideProgSludgeDensity" value="' + esc(s.guideProgSludgeDensity) + '" style="width:100%;padding:11px;font-size:16px;"></label><label>Dry solids (% w/w; explicit measured value)<input inputmode="decimal" data-actinput="onGuideProgField" data-f="guideProgDs" data-key="guideProgDs" value="' + esc(s.guideProgDs) + '" style="width:100%;padding:11px;font-size:16px;"></label></div>' : '') + winHtml + (prog.rangeWin ? doseWindowBanner(prog.rangeWin, 'Upper endpoint', { key: 'guide-range' }) : '') + consHtml + progBtns + '</div>';
     }
 
     var tdiHtml = '<div role="note" style="margin-top:12px;padding:12px;border:1px dashed #D8D2C4;">No validated TDI model is available for this market. Use descriptive measurements and site testing; potable bands are not reused.</div>';

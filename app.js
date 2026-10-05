@@ -91,7 +91,9 @@
       wtPumps: [{ flow: '', status: 'running' }], wtPumpUnit: '', wtReading: 'unknown', wtStrength: '', wtStrengthBasis: '', wtDose: '', wtHours: '24',
       wtShowAdvanced: false, wtShowWorking: false, wtPumpMsg: '', wtShareMsg: '', wtShareText: '',
       backupMsg: '', backupText: '', lastBackup: '',
-      showRestore: false, restoreText: '', restoreMsg: '', restoreOk: false
+      showRestore: false, restoreText: '', restoreMsg: '', restoreOk: false,
+      // Plain-notice disclosures ("Why?", "Source details"): view state only, collapsed by default, never saved.
+      noticeOpen: {}
     },
 
     PRODUCTS: DATA.products,
@@ -682,6 +684,21 @@
       var valid = supported && (!s.calcProductId || (p && known === s.form && !(known === 'liquid' && !this.productDensityConfirmed(p))));
       return { valid: valid, form: p && known ? known : (supported ? s.form : ''), density: valid && s.form === 'liquid' ? s.density : '' };
     },
+    // Dose-page input state for messages only: '' (usable), 'empty' (not yet entered: a prompt, never an error) or the
+    // specific problem with the entered text. Same strict parse as the calculation; it never supplies a value.
+    inputIssue: function (raw, positive, max) {
+      var t = String(raw == null ? '' : raw).trim();
+      if (t === '') return 'empty';
+      var n = this.parseNum(raw);
+      if (!isFinite(n)) return /^[-\u2212]/.test(t) ? 'negative' : (t.indexOf(',') >= 0 ? 'comma' : (/^\d*\.?\d+$/.test(t) ? 'range' : 'nan'));
+      if (positive && !(n > 0)) return 'zero';
+      if (max != null && n > max) return 'over';
+      return '';
+    },
+    inputIssueText: function (label, issue, rule, overText) {
+      var why = { comma: ' uses a comma.', negative: ' can\u2019t be negative.', zero: ' must be greater than zero.', over: ' can\u2019t be more than ' + overText + '.', range: ' is too large or too small to calculate with.', nan: ' isn\u2019t a plain number.' }[issue];
+      return label + why + ' ' + rule;
+    },
     computeCalc: function () {
       var s = this.state;
       var material = this.calcMaterial(s);
@@ -722,19 +739,81 @@
         if (liquid) dilution += ' (' + this.fmt(10 * S / rho, 3) + ' mL product)';
       }
 
-      var warnings = [];
+      // Messages only: every figure above is decided by the same conditions as before. kind 'prompt' = a field not yet
+      // entered (neutral), 'error' = entered text that cannot be used (red), 'caution' = a genuine caution (amber).
+      var warnings = [], self = this;
+      var add = function (kind, text) { warnings.push({ kind: kind, text: text }); };
+      var missingCode = function (u) { return u === undefined || u === null || u === ''; };
+      var NUMERIC_RANGE = 'A derived rate exceeds the representable numeric range or underflows. No zero-rate or pump-setting confirmation is inferred; check the entered magnitudes.';
       var numericUnavailable = ok && ((massGh > 0 && (strengthOk || (neat && liquid && rho > 0)) && !isFinite(solLh)) || (liquid && rho > 0 && !isFinite(neatLh)) || (solLh > 0 && pumpMax > 0 && !isFinite(strokePct)) || !isFinite(massKgDay));
-      if (numericUnavailable) warnings.push({ text: 'A derived rate exceeds the representable numeric range or underflows. No zero-rate or pump-setting confirmation is inferred; check the entered magnitudes.', bg: '#FBEBE7', border: '#E9C4B9', color: '#8A3A24' });
-      if ((!neat && !strengthOk) || (neat && (!liquid || !(rho > 0)))) warnings.push({ text: 'Invalid strength or density. Neat feed requires liquid product and confirmed kg/L density. Solution strength is g as-supplied product per 100 mL FINAL solution, not percent neat; it cannot exceed the neat mass per volume.', bg: '#FBEBE7', border: '#E9C4B9', color: '#8A3A24' });
-      if (s.pumpSource === 'manual' && !this.pumpUnitOf(s.pumpMaxUnit)) warnings.push({ text: 'Pump flow unit is unknown or missing. Confirm the unit explicitly (L/h, L/min, L/s or mL/min) before the capacity is used; no unit is assumed and the entered number is not converted.', bg: '#FBF9F4', border: '#E2DDD0', color: '#56635B' });
-      if (!(pumpMax > 0)) warnings.push({ text: 'Pump capacity unavailable or ambiguous. Enter a confirmed capacity at operating pressure in the selected unit (L/h, L/min, L/s or mL/min); bare gallons and multi-model annotations are not interpreted.', bg: '#FBF6EC', border: '#EBD9BC', color: '#8A5E17' });
-      if (!isFinite(this.flowFactor(s.calcMode === 'sludge' ? s.sludgeFlowUnit : s.flowUnit))) warnings.push({ text: 'Flow unit is unknown or missing. Confirm the flow unit explicitly before calculating delivery or catch advice; historical records are retained unchanged.', bg: '#FBF9F4', border: '#E2DDD0', color: '#56635B' });
-      if (!ok) warnings.push({ text: 'Invalid or missing flow, dose or solids values. Use plain non-negative decimal numbers (decimal point, no commas or grouping); flow and density must be positive, dry solids 0–100%.', bg: '#FBF9F4', border: '#E2DDD0', color: '#56635B' });
-      if (isFinite(strokePct) && strokePct > 100) warnings.push({ text: 'Pump stroke exceeds 100% — this pump is too small for the required feed, or dilute the solution less (higher %). Consider a larger pump.', bg: '#FBEBE7', border: '#E9C4B9', color: '#8A3A24' });
-      else if (isFinite(strokePct) && strokePct < 10 && strokePct > 0) warnings.push({ text: 'Pump running below ~10% stroke — accuracy suffers at very low output. Consider a smaller pump or a more dilute solution.', bg: '#FBF6EC', border: '#EBD9BC', color: '#8A5E17' });
+      if (numericUnavailable) add('error', NUMERIC_RANGE);
+      // Feed preparation. A cleared strength (e.g. after a library product pick) is a prompt, not an error.
+      var MATERIAL = 'Feed figures aren\u2019t calculated: the selected product\u2019s form or density isn\u2019t confirmed. Check the form (Liquid / emulsion or Powder), or choose the product again.';
+      var DENSITY_RULE = 'Enter the confirmed density in kg/L using a decimal point, e.g. 1.05.';
+      var NOT_NEAT = 'Strength is g product per 100 mL final solution, not percent neat.';
+      var strengthStatus = 'ok';
+      if (neat) {
+        if (s.form === 'powder') add('caution', 'Neat feed needs a liquid product. Choose Liquid / emulsion, or use a made-up solution for a powder.');
+        else if (!formOk) add('caution', MATERIAL);
+        else {
+          var neatDensityIssue = this.inputIssue(s.density, true);
+          if (neatDensityIssue === 'empty') add('prompt', 'Enter the confirmed product density (kg/L) to use neat feed.');
+          else if (neatDensityIssue) add('error', this.inputIssueText('Neat density', neatDensityIssue, DENSITY_RULE));
+        }
+      } else {
+        if (!formOk) add('caution', MATERIAL);
+        if (s.feedBasis !== 'solution') add('prompt', 'Choose the feed basis (made-up solution or neat liquid) to get pump feed figures.');
+        var strengthIssue = this.inputIssue(s.makedown, true), densityIssue = liquid ? this.inputIssue(s.density, true) : '';
+        if (strengthIssue === 'empty') { strengthStatus = 'empty'; add('prompt', 'Enter the solution strength (g product per 100 mL final solution) to get pump feed, stroke and batch figures.'); }
+        else if (strengthIssue) { strengthStatus = 'invalid'; add('error', this.inputIssueText('Solution strength', strengthIssue, 'Enter g product per 100 mL final solution using a decimal point, e.g. 0.25.')); }
+        if (densityIssue === 'empty') add('prompt', 'Enter the confirmed product density (kg/L) to check the solution strength against the neat product.');
+        else if (densityIssue) add('error', this.inputIssueText('Neat density', densityIssue, DENSITY_RULE));
+        else if (!strengthIssue && liquid && S > 100 * rho) { strengthStatus = 'invalid'; add('error', 'Solution strength can\u2019t be more than the neat product: ' + this.fmt(100 * rho) + '% w/v at ' + this.fmt(rho) + ' kg/L. ' + NOT_NEAT); }
+        else if (!strengthIssue && formOk && !liquid && S > 100) { strengthStatus = 'invalid'; add('error', 'Solution strength can\u2019t be more than 100% w/v (100 g per 100 mL). ' + NOT_NEAT); }
+      }
+      // Pump flow unit and capacity: a missing unit or capacity is a prompt; nothing is assumed or converted.
+      var pumpUnitKnown = !!this.pumpUnitOf(s.pumpMaxUnit);
+      if (s.pumpSource === 'manual' && !pumpUnitKnown) {
+        if (missingCode(s.pumpMaxUnit)) add('prompt', 'Confirm the pump flow unit (L/h, L/min, L/s or mL/min) to use the capacity. No unit is assumed.');
+        else add('caution', 'The saved pump flow unit isn\u2019t recognised. Confirm L/h, L/min, L/s or mL/min before the capacity is used; no unit is assumed and the entered number is not converted.');
+      }
+      if (!(pumpMax > 0)) {
+        var capacityIssue = s.pumpSource === 'manual' ? this.inputIssue(s.pumpMax, true) : '';
+        if (capacityIssue === 'empty') add('prompt', 'Enter the pump\u2019s maximum capacity at operating pressure to get pump stroke figures.');
+        else if (capacityIssue) add('error', this.inputIssueText('Pump capacity', capacityIssue, 'Enter the maximum delivery at operating pressure using a decimal point, with no commas or signs.'));
+        else if (s.pumpSource === 'manual' && !pumpUnitKnown) { /* the pump flow unit message above is the visible abstention */ }
+        else if (s.pumpSource === 'select' && !s.selectedCalcPumpId) add('prompt', 'Choose a pump, or tap Enter capacity, to get pump stroke figures.');
+        else add('caution', 'Pump capacity unavailable or ambiguous. Enter a confirmed capacity at operating pressure in the selected unit (L/h, L/min, L/s or mL/min); bare gallons and multi-model annotations are not interpreted.');
+      }
+      var flowCode = s.calcMode === 'sludge' ? s.sludgeFlowUnit : s.flowUnit, flowUnitKnown = isFinite(this.flowFactor(flowCode));
+      if (!flowUnitKnown) {
+        if (missingCode(flowCode)) add('prompt', 'Confirm the flow unit to get results. No unit is assumed.');
+        else add('caution', 'The saved flow unit isn\u2019t recognised. Confirm a listed flow unit before calculating delivery or catch advice; historical records are retained unchanged.');
+      }
+      // Flow, dose and solids: one prompt naming every empty field; one specific error per entered-but-invalid field.
+      if (!ok) {
+        var FLOW_RULE = 'Enter a number above zero using a decimal point, with no commas, signs or grouping.', DOSE_RULE = 'Enter zero or more using a decimal point, with no commas, signs or grouping.';
+        var fields = s.calcMode === 'sludge' ? [
+          ['sludge flow', 'Sludge flow', s.sludgeFlow, true, null, FLOW_RULE],
+          ['dry solids', 'Dry solids', s.ds, true, 100, 'Enter a % w/w above 0 and up to 100 using a decimal point, with no commas or signs.', '100 %'],
+          ['polymer dose', 'Polymer dose', s.doseKg, false, null, DOSE_RULE],
+          ['sludge density', 'Sludge density', s.sludgeDensity, true, null, 'Enter t/m\u00B3 above zero using a decimal point, with no commas or signs.']
+        ] : (s.calcMode === 'conc' ? [['flow rate', 'Flow rate', s.flow, true, null, FLOW_RULE], ['target dose', 'Target dose', s.dose, false, null, DOSE_RULE]] : []);
+        var missing = [], fieldInvalid = false;
+        fields.forEach(function (f) {
+          var issue = self.inputIssue(f[2], f[3], f[4]);
+          if (issue === 'empty') missing.push(f[0]);
+          else if (issue) { fieldInvalid = true; add('error', self.inputIssueText(f[1], issue, f[5], f[6])); }
+        });
+        if (missing.length) add('prompt', 'Enter the ' + (missing.length > 1 ? missing.slice(0, -1).join(', ') + ' and ' + missing[missing.length - 1] : missing[0]) + ' to get results.');
+        if (!fields.length) add('prompt', 'Choose Concentration or Sludge dewatering to get results.');
+        else if (!missing.length && !fieldInvalid && flowUnitKnown) add('error', NUMERIC_RANGE);
+      }
+      if (isFinite(strokePct) && strokePct > 100) add('error', 'Pump stroke exceeds 100% — this pump is too small for the required feed, or dilute the solution less (higher %). Consider a larger pump.');
+      else if (isFinite(strokePct) && strokePct < 10 && strokePct > 0) add('caution', 'Pump running below ~10% stroke — accuracy suffers at very low output. Consider a smaller pump or a more dilute solution.');
       var cp = this.allProducts().find(function (p) { return p.id === s.calcProductId; });
       var powderPolymer = cp && /\bpolymer\b|polyacrylamide|polyacrylate/i.test([cp.name, cp.application, cp.makeup, cp.subtitle].join(' '));
-      if (!liquid && powderPolymer && S > 0.7) warnings.push({ text: 'Powder polymer solutions can become viscous at higher strengths. Confirm the supplier-specific make-down limit and mixing procedure; no universal chemical threshold is assumed.', bg: '#FBF6EC', border: '#EBD9BC', color: '#8A5E17' });
+      if (!liquid && powderPolymer && S > 0.7) add('caution', 'Powder polymer solutions can become viscous at higher strengths. Confirm the supplier-specific make-down limit and mixing procedure; no universal chemical threshold is assumed.');
 
       var statusDot = !ok || !isFinite(solLh) || !isFinite(strokePct) || !(pumpMax > 0) || numericUnavailable ? '#4A5A54' : (isFinite(strokePct) && strokePct > 100 ? '#E86A4A' : '#4FE0B5');
       var strokeColor = (isFinite(strokePct) && strokePct > 100) ? '#FF8A6B' : '#4FE0B5';
@@ -769,6 +848,7 @@
         batchKg: this.fmt(batchKg, 2),
         batchHours: this.fmt(batchHours, 1),
         statusDot: statusDot,
+        strengthStatus: strengthStatus,
         warnings: warnings,
         hasWarn: warnings.length > 0
       };
@@ -1715,6 +1795,17 @@
     onPcSg: function (el) { App.setState({ pcSg: el.value, pcSgEntered: true }); },
     togglePcAdvanced: function () { App.setState({ pcShowAdvanced: !App.state.pcShowAdvanced }); },
     togglePcWorking: function () { App.setState({ pcShowWorking: !App.state.pcShowWorking }); },
+    // Toggle one plain-notice disclosure; focus stays on its button so keyboard users can collapse it again.
+    toggleNotice: function (el) {
+      var key = el.getAttribute('data-notice'), cur = App.state.noticeOpen || {}, next = {};
+      for (var k in cur) { if (Object.prototype.hasOwnProperty.call(cur, k)) next[k] = cur[k]; }
+      next[key] = !(Object.prototype.hasOwnProperty.call(cur, key) && cur[key] === true);
+      App.setState({ noticeOpen: next });
+      var btns = App.$screen ? App.$screen.querySelectorAll('[data-notice]') : [];
+      for (var i = 0; i < btns.length; i++) {
+        if (btns[i].getAttribute('data-notice') === key) { try { btns[i].focus({ preventScroll: true }); } catch (e) {} break; }
+      }
+    },
     // Share / copy the results text: the same fallback chain as backups (share -> clipboard -> visible text).
     // Success is claimed only when the browser reports it; a cancelled share sends nothing.
     sharePcResults: function () {
