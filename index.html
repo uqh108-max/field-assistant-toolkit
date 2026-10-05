@@ -45,6 +45,15 @@
     #fa-screen button * { font-weight:400; }   /* only the button's own label is 700; nested helper text resets (explicit inline weights still win) */
     #fa-screen button.fa-row { font-size:16px !important; font-weight:600 !important; }
     #fa-nav { font-size:12px; font-weight:600; }
+    /* Bottom nav, 7 destinations: labels keep the 12/600 token on one line, every target stays >=44x44 inside the bar.
+       Side padding/gaps are dropped so the widest labels (Calculator, Products) fit from 360px; below 360px the
+       bar becomes two rows of four (one row cannot hold seven 44px targets plus a 61px label in 320px). */
+    #fa-nav { padding-left:0 !important; padding-right:0 !important; gap:0 !important; }
+    #fa-nav button { min-height:44px; }
+    @media (max-width: 359.98px) {
+      #fa-nav { display:grid !important; grid-template-columns:repeat(4, minmax(0, 1fr)); padding-top:4px !important; padding-bottom:calc(4px + env(safe-area-inset-bottom)) !important; }
+      #fa-nav button { padding:2px !important; }
+    }
     #fa-screen label { display:block; font-size:12px; font-weight:700; color:#4B564F; }
     #fa-screen .fa-dark-form label { color:#9FB0AA; }
     #fa-screen label > select, #fa-screen label > .fa-select-field, #fa-screen label > input { margin-top:5px; }

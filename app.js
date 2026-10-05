@@ -78,6 +78,18 @@
       guideProgFor: '', guideProgByPb: {},
       jarCurrentDose: '', bracketNote: '',
       mgSample: '500', mgSolids: '30', mgStock: '0.1', mgMl: '',
+      // Calculator (polymer dose solver): in-memory draft only, never saved. Units, product form and
+      // reading type start unconfirmed; SG 1.0 and 24 run hours are visible, labelled defaults.
+      pcSolve: 'dose', pcSludgeFlow: '', pcSludgeUnit: '', pcDs: '', pcDsLocation: '',
+      pcPumps: [{ flow: '', status: 'running' }], pcPumpUnit: '', pcReading: 'unknown',
+      pcBatchKg: '', pcBatchL: '', pcForm: 'unknown', pcActive: '', pcDose: '',
+      pcSg: '1.0', pcSgEntered: false, pcHours: '24',
+      pcShowAdvanced: false, pcShowWorking: false, pcPumpMsg: '', pcShareMsg: '', pcShareText: '',
+      // Calculator mode selector + water treatment dose (mg/L) in-memory draft (never persisted)
+      ccMode: 'sludge',
+      wtSolve: 'dose', wtWaterFlow: '', wtWaterUnit: '', wtBasis: '', wtDensity: '', wtDensitySource: '', wtBatchKg: '', wtBatchL: '',
+      wtPumps: [{ flow: '', status: 'running' }], wtPumpUnit: '', wtReading: 'unknown', wtStrength: '', wtStrengthBasis: '', wtDose: '', wtHours: '24',
+      wtShowAdvanced: false, wtShowWorking: false, wtPumpMsg: '', wtShareMsg: '', wtShareText: '',
       backupMsg: '', backupText: '', lastBackup: '',
       showRestore: false, restoreText: '', restoreMsg: '', restoreOk: false
     },
@@ -762,6 +774,469 @@
       };
     },
 
+    // ---- Calculator: polymer dose solver for sludge dewatering ---------------
+    // dose [kg product / t DS] = 1000 x Qpoly[L/h] x C[kg/L] / (Qsludge[L/h] x SG[kg/L] x DS%/100)
+    // Flows are converted once to L/h with exact factors; display rounding never feeds back into a
+    // calculation. No unit, active fraction, density or dosing window is assumed: a missing, invalid or
+    // unknown input abstains with a message naming the field.
+    PC_SLUDGE_UNITS: [
+      { v: 'Ls', label: 'L/s', lh: 3600 },
+      { v: 'Lmin', label: 'L/min', lh: 60 },
+      { v: 'Lh', label: 'L/h', lh: 1 },
+      { v: 'm3h', label: 'm³/h', lh: 1000 }
+    ],
+    PC_SOLVE: [
+      { v: 'dose', label: 'Dose (kg product / t DS)' },
+      { v: 'flow', label: 'Total polymer solution flow' },
+      { v: 'sludge', label: 'Sludge flow' },
+      { v: 'ds', label: 'Dry solids %' },
+      { v: 'batch', label: 'Batch strength (make-down)' }
+    ],
+    PC_READING: [
+      { v: 'unknown', label: 'Unknown' },
+      { v: 'measured', label: 'Measured (drawdown or catch test)' },
+      { v: 'setpoint', label: 'Setpoint or display' }
+    ],
+    PC_FORMS: [
+      { v: 'unknown', label: 'Unknown' },
+      { v: 'powder', label: 'Powder' },
+      { v: 'emulsion', label: 'Emulsion' },
+      { v: 'liquid', label: 'Liquid' }
+    ],
+    PC_PUMP_STATUS: [
+      { v: 'running', label: 'Running' },
+      { v: 'standby', label: 'Standby/off' }
+    ],
+    PC_MAX_PUMPS: 20,
+    PC_CHECK_LABEL: 'Indicative belt-press check from user-supplied field guidance, not a specification or approval',
+    PC_CONVENTION: 'Convention: make-down is entered as kg neat product + L batch water; kg per L of batch water is treated as kg per L of solution (the product\u2019s own volume is ignored, negligible at field strengths).',
+    pcOption: function (list, code) {
+      if (typeof code !== 'string') return null;
+      for (var i = 0; i < list.length; i++) if (list[i].v === code) return list[i];
+      return null;
+    },
+    // Display only: sf significant figures; integer digits are never rounded away; no exponent text.
+    pcFmt: function (n, sf, keepZeros) {
+      if (typeof n !== 'number' || !isFinite(n)) return '—';
+      if (n === 0) return '0';
+      var text = this.decimalText(Math.abs(n) >= Math.pow(10, sf) ? String(Math.round(n)) : n.toPrecision(sf));
+      if (!keepZeros && text.indexOf('.') >= 0) text = text.replace(/0+$/, '').replace(/\.$/, '');
+      return text;
+    },
+    // One entered number -> { value } or { error } naming the field. Plain positive decimals only.
+    pcNumber: function (raw, label, opts) {
+      opts = opts || {};
+      var t = String(raw == null ? '' : raw).trim();
+      if (!t) return { error: label + ' is empty' + (opts.emptyHint || ' — enter a value.') };
+      if (t.indexOf(',') >= 0) return { error: label + ': comma decimals are not accepted — use a decimal point (e.g. 23.7).' };
+      if (/^[-+]?(\d+\.?\d*|\.\d+)e[-+]?\d+$/i.test(t)) return { error: label + ': exponent notation is not accepted — enter a plain decimal number.' };
+      if (t.charAt(0) === '-') return { error: label + ' must be positive — negative values are not accepted.' };
+      if (!/^\d*\.?\d+$/.test(t)) return { error: label + ' is not a plain decimal number — use digits and one decimal point only.' };
+      var n = this.parseNum(t);
+      if (!isFinite(n)) return { error: label + ' is outside the representable numeric range (too large or too small).' };
+      if (!(n > 0)) return { error: label + ' must be greater than zero' + (opts.zeroHint || '.') };
+      return { value: n };
+    },
+    polyInputs: function () {
+      var s = this.state;
+      return { solve: s.pcSolve, sludgeFlow: s.pcSludgeFlow, sludgeUnit: s.pcSludgeUnit, ds: s.pcDs, dsLocation: s.pcDsLocation, pumps: s.pcPumps, pumpUnit: s.pcPumpUnit, reading: s.pcReading, batchKg: s.pcBatchKg, batchL: s.pcBatchL, form: s.pcForm, active: s.pcActive, dose: s.pcDose, sg: s.pcSg, sgEntered: s.pcSgEntered, hours: s.pcHours };
+    },
+    computePoly: function () { return this.polyCalc(this.polyInputs()); },
+    polyInputSig: function () {
+      var s = this.state;
+      return JSON.stringify(['pcSolve', 'pcSludgeFlow', 'pcSludgeUnit', 'pcDs', 'pcDsLocation', 'pcPumps', 'pcPumpUnit', 'pcReading', 'pcBatchKg', 'pcBatchL', 'pcForm', 'pcActive', 'pcDose', 'pcSg', 'pcSgEntered', 'pcHours'].map(function (k) { return s[k]; }));
+    },
+    polyCalc: function (inp) {
+      var self = this, errors = [], warnings = [], cautions = [], notes = [], working = [];
+      var NUMS = ['qsLh', 'qsM3h', 'qsUnitValue', 'dsPct', 'tdsH', 'kgDsH', 'qpLh', 'qpUnitValue', 'c', 'cPctWV', 'kgPer1000', 'batchKg', 'batchL', 'productKgH', 'productKgDay', 'solutionLDay', 'batchesDay', 'ratioPct', 'dose', 'activeKgH', 'activeDose', 'crossDose', 'sg', 'hours'];
+      var v = {}; NUMS.forEach(function (k) { v[k] = NaN; });
+      var err = function (field, text) { errors.push({ field: field, text: text }); };
+      var num = function (field, raw, label, opts) { var r = self.pcNumber(raw, label, opts); if (r.error) { err(field, r.error); return NaN; } return r.value; };
+      var raw = function (x) { return String(x == null ? '' : x).trim(); };
+      var F = function (n) { return self.pcFmt(n, 6); };
+      var solveOpt = this.pcOption(this.PC_SOLVE, inp.solve), solve = solveOpt ? solveOpt.v : '';
+      if (!solveOpt) err('solve', 'Solve-for choice is not recognised — choose what to calculate.');
+      var sUnit = this.pcOption(this.PC_SLUDGE_UNITS, inp.sludgeUnit), pUnit = this.pumpUnitOf(inp.pumpUnit);
+      var sUnitMsg = function () { return raw(inp.sludgeUnit) ? 'Sludge flow unit is not recognised — choose L/s, L/min, L/h or m³/h.' : 'Sludge flow unit is not selected — choose L/s, L/min, L/h or m³/h. No unit is assumed (a unit mix-up causes a 3.6× or larger error).'; };
+      var pUnitMsg = function () { return raw(inp.pumpUnit) ? 'Pump flow unit is not recognised — choose L/h, L/min, L/s or mL/min.' : 'Pump flow unit is not selected — choose L/h, L/min, L/s or mL/min. No unit is assumed.'; };
+      var qs = NaN, ds = NaN, qp = NaN, bk = NaN, bl, dose = NaN, sg, hours, active = NaN, c = NaN, tds = NaN, kg = NaN;
+      // sludge flow and its unit (the unit is optional display-only when sludge flow is the solved field)
+      if (solve !== 'sludge') { qs = num('sludgeFlow', inp.sludgeFlow, 'Sludge flow'); if (!sUnit) err('sludgeUnit', sUnitMsg()); else qs = qs * sUnit.lh; }
+      else if (raw(inp.sludgeUnit) && !sUnit) err('sludgeUnit', sUnitMsg());
+      if (solve !== 'ds') {
+        ds = num('ds', inp.ds, 'Dry solids');
+        if (ds >= 100) { err('ds', 'Dry solids must be below 100 % (it is the dry fraction of the wet sludge mass).'); ds = NaN; }
+      }
+      // polymer pumps: only Running rows are summed; Standby/off rows stay listed but excluded
+      var rows = Array.isArray(inp.pumps) ? inp.pumps : [], running = 0, sumEntered = 0, sumLh = 0, runParts = [], excluded = [], pumpsOk = true;
+      if (solve !== 'flow') {
+        if (!rows.length) { err('pumps', 'Add at least one pump row.'); pumpsOk = false; }
+        else if (rows.length > this.PC_MAX_PUMPS) { err('pumps', 'A maximum of 20 pump rows is supported — remove rows.'); pumpsOk = false; }
+        else {
+          rows.forEach(function (row, i) {
+            var n = i + 1, st = row && typeof row === 'object' ? row.status : undefined, flowRaw = row && typeof row === 'object' ? row.flow : '';
+            if (st === 'standby') { excluded.push({ n: n, text: raw(flowRaw) }); return; }
+            if (st !== 'running') { err('pumpStatus-' + n, 'Pump ' + n + ' status is not recognised — choose Running or Standby/off.'); pumpsOk = false; return; }
+            running++;
+            var x = num('pump-' + n, flowRaw, 'Pump ' + n + ' flow', { emptyHint: ' — enter its reading, set it to Standby/off or remove the row.', zeroHint: ' — set the pump to Standby/off if it is not running.' });
+            if (!isFinite(x)) { pumpsOk = false; return; }
+            runParts.push(raw(flowRaw)); sumEntered += x;
+            if (pUnit) sumLh += self.pumpFlowToLh(x, pUnit.v);
+          });
+          if (!running) { err('pumps', 'No pump is set to Running — at least one running pump is needed to total the polymer solution flow.'); pumpsOk = false; }
+        }
+        if (!pUnit) err('pumpUnit', pUnitMsg());
+        if (pumpsOk && pUnit) qp = sumLh;
+      } else if (raw(inp.pumpUnit) && !pUnit) err('pumpUnit', pUnitMsg());
+      if (solve !== 'batch') bk = num('batchKg', inp.batchKg, 'Neat product per batch');
+      bl = num('batchL', inp.batchL, 'Batch water volume');
+      if (solve !== 'dose') dose = num('dose', inp.dose, 'Target dose', { emptyHint: ' — enter the target dose in kg product per t DS.' });
+      sg = num('sg', inp.sg, 'Sludge SG');
+      var blocking = errors.length;
+      // optional / daily-only inputs never block the product-basis result
+      hours = num('hours', inp.hours, 'Run hours per day');
+      if (hours > 24) { err('hours', 'Run hours per day cannot exceed 24.'); hours = NaN; }
+      if (raw(inp.active)) {
+        active = num('active', inp.active, 'Active content');
+        if (active > 100) { err('active', 'Active content cannot exceed 100 %.'); active = NaN; }
+      }
+      var sgAssumed = !inp.sgEntered && raw(inp.sg) === '1.0';
+      var sgText = 'SG ' + raw(inp.sg) + ' kg/L' + (sgAssumed ? ' (assumed)' : '');
+      var form = this.pcOption(this.PC_FORMS, inp.form), reading = this.pcOption(this.PC_READING, inp.reading);
+      if (solve !== 'flow') {
+        if (reading && reading.v === 'setpoint') cautions.push('Pump readings are setpoints or display values, not measured delivery: verify by drawdown or catch test before relying on this result.');
+        else if (!reading || reading.v !== 'measured') cautions.push('Pump reading type is unknown: verify actual delivery by drawdown or catch test before relying on this result.');
+      }
+      if (sgAssumed) notes.push('Sludge SG 1.0 kg/L (assumed) — change it under Advanced if a measured value is known.');
+      if (!raw(inp.active)) {
+        notes.push('Dose is kg of product as made down (as-supplied basis). No active fraction is assumed for any product form; enter active content % (from the supplier TDS/CoA) to also show kg active.');
+        if (form && (form.v === 'emulsion' || form.v === 'liquid')) notes.push('Emulsion and liquid products are typically not 100 % active: do not compare this product-basis dose with an active-basis figure.');
+      }
+      if (solve !== 'ds' && !raw(inp.dsLocation)) notes.push('DS sample location not recorded — DS sampled away from the press feed changes the dose in proportion.');
+
+      var ok = !blocking, dsInvalid = false;
+      if (ok) {
+        var dsf = ds / 100;
+        if (solve === 'dose') { tds = qs * sg * dsf / 1000; kg = qp * (c = bk / bl); dose = kg / tds; }
+        else if (solve === 'flow') { tds = qs * sg * dsf / 1000; kg = dose * tds; c = bk / bl; qp = kg / c; }
+        else if (solve === 'sludge') { c = bk / bl; kg = qp * c; tds = kg / dose; qs = tds * 1000 / (sg * dsf); }
+        else if (solve === 'ds') { c = bk / bl; kg = qp * c; tds = kg / dose; ds = tds * 1000 / (qs * sg) * 100; }
+        else if (solve === 'batch') { tds = qs * sg * dsf / 1000; kg = dose * tds; c = kg / qp; bk = c * bl; }
+        var cross = (qp / qs * 100 / 100) * ((c * 100) / ds) * 1000 / sg;
+        var core = [qs, ds, tds, qp, c, kg, dose, bk, qp / qs * 100, c * 100, c * 1000, tds * 1000, cross];
+        if (solve === 'ds' && isFinite(ds) && ds >= 100) {
+          dsInvalid = true; ok = false;
+          err('ds', 'Solved dry solids of ' + this.pcFmt(ds, 4) + ' % is not physically possible (must be above 0 and below 100 %). Check the target dose, flows, units and make-down.');
+        } else if (core.some(function (x) { return !isFinite(x) || !(x > 0); })) {
+          ok = false; err('result', 'A derived value is outside the representable numeric range (overflow or underflow) — check the magnitudes entered. No result is shown.');
+        }
+      }
+      if (ok) {
+        v.qsLh = qs; v.qsM3h = qs / 1000; v.qsUnitValue = sUnit ? qs / sUnit.lh : NaN;
+        v.dsPct = ds; v.tdsH = tds; v.kgDsH = tds * 1000; v.qpLh = qp; v.qpUnitValue = pUnit ? this.lhToPumpFlow(qp, pUnit.v) : NaN;
+        v.c = c; v.cPctWV = c * 100; v.kgPer1000 = c * 1000; v.batchKg = bk; v.batchL = bl; v.productKgH = kg;
+        v.ratioPct = qp / qs * 100; v.dose = dose; v.crossDose = cross; v.sg = sg;
+        if (hours > 0) {
+          v.hours = hours; v.productKgDay = kg * hours; v.solutionLDay = qp * hours; v.batchesDay = qp * hours / bl;
+          if (![v.productKgDay, v.solutionLDay, v.batchesDay].every(function (x) { return isFinite(x) && x > 0; })) { v.productKgDay = v.solutionLDay = v.batchesDay = NaN; err('hours', 'Daily totals are outside the representable numeric range — not shown.'); }
+        }
+        if (active > 0) {
+          v.activeKgH = kg * active / 100; v.activeDose = dose * active / 100;
+          if (!(isFinite(v.activeKgH) && v.activeKgH > 0 && isFinite(v.activeDose) && v.activeDose > 0)) { v.activeKgH = v.activeDose = NaN; err('active', 'Active-basis values are outside the representable numeric range — not shown.'); }
+        }
+        if (dose < 1 || dose > 8) warnings.push({ kind: 'dose-range', text: this.PC_CHECK_LABEL + ': dose ' + this.pcFmt(dose, 3) + ' kg product/t DS is outside 1–8 kg product/t DS (product basis, as made down; not active polymer). Check pump totals (per-pump vs total, standby pumps), flow units, DS sample point.' });
+        if (v.ratioPct < 1 || v.ratioPct > 5) warnings.push({ kind: 'ratio-range', text: this.PC_CHECK_LABEL + ': solution-to-sludge ratio ' + this.pcFmt(v.ratioPct, 3) + ' % is outside 1–5 %. Check pump totals, flow units and the make-down.' });
+
+        // ---- Show working: each step with the actual numbers (more digits than the results) ----
+        var dsText = solve === 'ds' ? F(ds) : raw(inp.ds), wet = qs * sg;
+        var sludgeLine = 'Sludge flow: ' + raw(inp.sludgeFlow) + ' ' + (sUnit ? sUnit.label : '') + ' × ' + (sUnit ? sUnit.lh : '') + ' = ' + F(qs) + ' L/h';
+        var wetLine = 'Wet sludge: ' + F(qs) + ' L/h × ' + sgText + ' = ' + F(wet) + ' kg/h';
+        var dsLine = 'Dry solids: ' + F(wet) + ' kg/h × ' + dsText + ' % ÷ 100 = ' + F(tds * 1000) + ' kg DS/h = ' + F(tds) + ' t DS/h';
+        var pumpLines = function () {
+          var lines = ['Pumps: ' + running + ' of ' + rows.length + ' pumps running: ' + runParts.join(' + ') + ' = ' + F(sumEntered) + ' ' + pUnit.label + ' × ' + F(pUnit.num / pUnit.den) + ' = ' + F(qp) + ' L/h (total running flow)'];
+          excluded.forEach(function (x) { lines.push('Pump ' + x.n + ': ' + (x.text ? x.text + ' ' + pUnit.label : '(blank)') + ' — standby/off, excluded from the total'); });
+          return lines;
+        };
+        var strengthLine = 'Solution strength: ' + raw(inp.batchKg) + ' kg ÷ ' + raw(inp.batchL) + ' L = ' + F(c) + ' kg/L (' + F(c * 100) + ' % w/v; ' + F(c * 1000) + ' kg per 1000 L)';
+        var productLine = 'Product: ' + F(qp) + ' L/h × ' + F(c) + ' kg/L = ' + F(kg) + ' kg product/h';
+        if (solve === 'dose') working = [sludgeLine, wetLine, dsLine].concat(pumpLines(), [strengthLine, this.PC_CONVENTION, productLine, 'Dose: ' + F(kg) + ' kg/h ÷ ' + F(tds) + ' t DS/h = ' + F(dose) + ' kg product/t DS']);
+        else if (solve === 'flow') working = [sludgeLine, wetLine, dsLine, strengthLine, this.PC_CONVENTION, 'Product needed: ' + raw(inp.dose) + ' kg product/t DS × ' + F(tds) + ' t DS/h = ' + F(kg) + ' kg product/h', 'Total running solution flow: ' + F(kg) + ' kg/h ÷ ' + F(c) + ' kg/L = ' + F(qp) + ' L/h' + (pUnit ? ' = ' + F(v.qpUnitValue) + ' ' + pUnit.label : '') + ' (no per-pump split)'];
+        else if (solve === 'sludge') working = pumpLines().concat([strengthLine, this.PC_CONVENTION, productLine, 'Dry solids load: ' + F(kg) + ' kg/h ÷ ' + raw(inp.dose) + ' kg/t DS = ' + F(tds) + ' t DS/h = ' + F(tds * 1000) + ' kg DS/h', 'Sludge flow: ' + F(tds * 1000) + ' kg DS/h ÷ (' + dsText + ' % ÷ 100) ÷ ' + sgText + ' = ' + F(qs) + ' L/h = ' + F(qs / 1000) + ' m³/h' + (sUnit ? ' = ' + F(v.qsUnitValue) + ' ' + sUnit.label : '')]);
+        else if (solve === 'ds') working = [sludgeLine, wetLine].concat(pumpLines(), [strengthLine, this.PC_CONVENTION, productLine, 'Dry solids load: ' + F(kg) + ' kg/h ÷ ' + raw(inp.dose) + ' kg/t DS = ' + F(tds) + ' t DS/h = ' + F(tds * 1000) + ' kg DS/h', 'Dry solids: ' + F(tds * 1000) + ' kg DS/h ÷ ' + F(wet) + ' kg/h × 100 = ' + F(ds) + ' %']);
+        else if (solve === 'batch') working = [sludgeLine, wetLine, dsLine].concat(pumpLines(), ['Product needed: ' + raw(inp.dose) + ' kg product/t DS × ' + F(tds) + ' t DS/h = ' + F(kg) + ' kg product/h', 'Solution strength: ' + F(kg) + ' kg/h ÷ ' + F(qp) + ' L/h = ' + F(c) + ' kg/L (' + F(c * 100) + ' % w/v)', 'Per batch: ' + F(c) + ' kg/L × ' + raw(inp.batchL) + ' L = ' + F(bk) + ' kg product (' + F(c * 1000) + ' kg per 1000 L)', this.PC_CONVENTION]);
+        working.push('Solution-to-sludge ratio: ' + F(qp) + ' L/h ÷ ' + F(qs) + ' L/h × 100 = ' + F(v.ratioPct) + ' %');
+        var agrees = Math.abs(cross - dose) <= 1e-9 * dose;
+        working.push('Cross-check: ' + F(v.ratioPct) + ' % × (' + F(c * 100) + ' % ÷ ' + dsText + ' %) × 1000 ÷ SG ' + raw(inp.sg) + ' = ' + F(cross) + ' kg product/t DS — ' + (agrees ? 'agrees with the dose' : 'DOES NOT agree with the dose'));
+        if (isFinite(v.productKgDay)) working.push('Daily: ' + F(kg) + ' kg/h × ' + raw(inp.hours) + ' h = ' + F(v.productKgDay) + ' kg product/day; ' + F(qp) + ' L/h × ' + raw(inp.hours) + ' h ÷ ' + raw(inp.batchL) + ' L = ' + F(v.batchesDay) + ' batches/day');
+        if (isFinite(v.activeDose)) working.push('Active: ' + F(kg) + ' kg/h × ' + raw(inp.active) + ' % = ' + F(v.activeKgH) + ' kg active/h; ' + F(dose) + ' × ' + raw(inp.active) + ' % = ' + F(v.activeDose) + ' kg active/t DS');
+      }
+      // headline: the solved field
+      var hl = { label: { dose: 'Polymer dose', flow: 'Total running polymer solution flow required', sludge: 'Sludge flow', ds: 'Dry solids', batch: 'Batch strength' }[solve] || 'Result', text: '—', unit: '' };
+      if (solve === 'dose') hl.unit = 'kg product / t DS';
+      else if (solve === 'flow') hl.unit = pUnit ? pUnit.label + (ok ? ' (' + this.pcFmt(qp, 4) + ' L/h)' : '') : 'L/h' + (ok ? ' (choose a pump flow unit to also show L/min, L/s or mL/min)' : '');
+      else if (solve === 'sludge') hl.unit = (sUnit ? sUnit.label : 'L/h') + (ok ? ' (' + (sUnit ? this.pcFmt(qs, 4) + ' L/h; ' : '') + this.pcFmt(qs / 1000, 4) + ' m³/h)' : '');
+      else if (solve === 'ds') hl.unit = '% dry solids';
+      else if (solve === 'batch') hl.unit = ok ? 'kg product per ' + this.pcFmt(bl, 6) + ' L batch (' + this.pcFmt(c * 1000, 4) + ' kg per 1000 L; ' + this.pcFmt(c * 100, 4) + ' % w/v)' : 'kg product per batch';
+      if (ok) hl.text = this.pcFmt({ dose: dose, flow: pUnit ? v.qpUnitValue : qp, sludge: sUnit ? v.qsUnitValue : qs, ds: ds, batch: bk }[solve], 3); // display only; trailing zeros stripped as on the Dose page (App.fmt)
+      return { ok: ok, solve: solve, dsInvalid: dsInvalid, errors: errors, warnings: warnings, cautions: cautions, notes: notes, working: working, v: v, headline: hl,
+        pumpsRunning: solve === 'flow' ? NaN : running, pumpsTotal: solve === 'flow' ? NaN : rows.length, pumpsRunningEntered: sumEntered, excluded: excluded };
+    },
+    // Plain-text record for Share / Copy: inputs, units, assumptions, flags and the serving release.
+    polyShareText: function (r, inp, build) {
+      var self = this, L = [], raw = function (x) { return String(x == null ? '' : x).trim(); }, F = function (n, sf) { return self.pcFmt(n, sf || 4); };
+      var solve = this.pcOption(this.PC_SOLVE, inp.solve), sUnit = this.pcOption(this.PC_SLUDGE_UNITS, inp.sludgeUnit), pUnit = this.pumpUnitOf(inp.pumpUnit);
+      var reading = this.pcOption(this.PC_READING, inp.reading), form = this.pcOption(this.PC_FORMS, inp.form), v = r.v;
+      L.push('Field Assistant — Calculator: polymer dose (sludge dewatering)');
+      L.push('Solved for: ' + (solve ? solve.label : 'not recognised'));
+      L.push(r.ok ? 'Result: ' + r.headline.text + ' ' + r.headline.unit + ' (' + r.headline.label + ')' : 'No result: ' + r.errors.map(function (e) { return e.text; }).join(' '));
+      L.push('Inputs:');
+      L.push('- Sludge flow: ' + (inp.solve === 'sludge' ? 'solved (see result)' : raw(inp.sludgeFlow) + ' ' + (sUnit ? sUnit.label : '[unit not selected]') + (r.ok ? ' (' + F(v.qsLh, 6) + ' L/h)' : '')));
+      L.push('- Dry solids: ' + (inp.solve === 'ds' ? 'solved (see result)' : raw(inp.ds) + ' %') + ' (sample location: ' + (raw(inp.dsLocation) || 'not recorded') + ')');
+      if (inp.solve === 'flow') L.push('- Pumps: solved as the total running flow (no per-pump split); pump flow unit: ' + (pUnit ? pUnit.label : 'not selected'));
+      else {
+        L.push('- Pump flow unit: ' + (pUnit ? pUnit.label : 'not selected') + '; Reading type: ' + (reading ? reading.label : 'not recognised'));
+        var rows = Array.isArray(inp.pumps) ? inp.pumps : [];
+        L.push('- Pumps: ' + (isFinite(r.pumpsRunning) ? r.pumpsRunning : 0) + ' of ' + rows.length + ' pumps running' + (r.ok ? '; Total running flow: ' + F(r.pumpsRunningEntered, 6) + ' ' + pUnit.label + ' (' + F(v.qpLh, 6) + ' L/h)' : ''));
+        rows.forEach(function (p, i) {
+          var t = p && typeof p === 'object' ? raw(p.flow) : '', st = p && typeof p === 'object' ? p.status : '';
+          L.push('  Pump ' + (i + 1) + ': ' + (t ? t + (pUnit ? ' ' + pUnit.label : '') : '(blank)') + (st === 'standby' ? ' — standby/off, excluded' : st === 'running' ? ' (running)' : ' (status not recognised)'));
+        });
+      }
+      L.push('- Make-down: ' + (inp.solve === 'batch' ? 'solved' : raw(inp.batchKg) + ' kg') + ' product in ' + raw(inp.batchL) + ' L water' + (r.ok ? ' = ' + F(v.c, 6) + ' kg/L (' + F(v.cPctWV, 6) + ' % w/v)' : ''));
+      L.push('- Product form: ' + (form ? form.label : 'not recognised') + '; active content: ' + (raw(inp.active) ? raw(inp.active) + ' %' : 'not entered (dose is kg product as made down; no active fraction assumed)'));
+      if (inp.solve !== 'dose') L.push('- Target dose: ' + raw(inp.dose) + ' kg product/t DS');
+      L.push('- Sludge SG: ' + raw(inp.sg) + ' kg/L' + (!inp.sgEntered && raw(inp.sg) === '1.0' ? ' (assumed)' : ' (entered)'));
+      L.push('- Run hours per day: ' + raw(inp.hours));
+      if (r.ok) {
+        L.push('Outputs:');
+        L.push('- Dose: ' + F(v.dose, 4) + ' kg product/t DS');
+        L.push('- Dry solids load: ' + F(v.tdsH) + ' t DS/h (' + F(v.kgDsH) + ' kg DS/h); DS ' + F(v.dsPct) + ' %');
+        L.push('- Sludge flow: ' + F(v.qsLh) + ' L/h (' + F(v.qsM3h) + ' m³/h' + (sUnit ? '; ' + F(v.qsUnitValue) + ' ' + sUnit.label : '') + ')');
+        L.push('- Polymer solution (total running): ' + F(v.qpLh) + ' L/h' + (pUnit ? ' (' + F(v.qpUnitValue) + ' ' + pUnit.label + ')' : ''));
+        L.push('- Product: ' + F(v.productKgH) + ' kg/h' + (isFinite(v.productKgDay) ? '; ' + F(v.productKgDay) + ' kg/day' : '; per day not calculated'));
+        L.push('- Batches per day: ' + (isFinite(v.batchesDay) ? F(v.batchesDay) + ' × ' + raw(inp.batchL) + ' L' : 'not calculated'));
+        L.push('- Solution-to-sludge ratio: ' + F(v.ratioPct) + ' %');
+        if (isFinite(v.activeDose)) L.push('- Active: ' + F(v.activeKgH) + ' kg active/h; ' + F(v.activeDose) + ' kg active/t DS (from the entered ' + raw(inp.active) + ' %)');
+      }
+      var flags = r.warnings.map(function (w) { return w.text; }).concat(r.cautions, r.ok ? r.errors.map(function (e) { return e.text; }) : [], r.notes);
+      if (flags.length) { L.push('Flags and notes:'); flags.forEach(function (t) { L.push('- ' + t); }); }
+      L.push(this.PC_CONVENTION);
+      L.push('Indicative 1–8 kg product/t DS (product basis, as made down) and 1–5 % ratio checks are user-supplied field guidance, not a specification or approval.');
+      L.push('BUILD: ' + (build && build.status === 'ok' ? build.build + ' (release that served this app session)' : build && build.status === 'none' ? 'not available (app opened before the offline release was installed; reopen the app to include it)' : 'not available (the serving release could not be confirmed)'));
+      var d = new Date(), p2 = function (n) { return (n < 10 ? '0' : '') + n; }, off = -d.getTimezoneOffset();
+      L.push('Generated: ' + d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()) + ' ' + p2(d.getHours()) + ':' + p2(d.getMinutes()) + ' (UTC' + (off >= 0 ? '+' : '-') + p2(Math.floor(Math.abs(off) / 60)) + ':' + p2(Math.abs(off) % 60) + ')');
+      return L.join('\n');
+    },
+
+    // ---- Calculator mode 2: water treatment dose (mg/L) ------------------------------------------------
+    // mg/h = chemical L/h x K kg/L x 1e6 (K = product density for neat liquid, kg product per L water for a
+    // made-down solution); dose mg/L = mg/h / water L/h. Volumetric dose (neat only) L/ML = chemical L/h x 1e6 /
+    // water L/h (= mL/m3). Flows are converted once to L/h with exact factors. No unit, density, strength or
+    // dosing range is assumed and no range warning is issued for drinking water.
+    WT_WATER_UNITS: [
+      { v: 'MLd', label: 'ML/d', num: 1000000, den: 24 },
+      { v: 'm3d', label: 'm³/d', num: 1000, den: 24 },
+      { v: 'm3h', label: 'm³/h', num: 1000, den: 1 },
+      { v: 'Ls', label: 'L/s', num: 3600, den: 1 },
+      { v: 'Lmin', label: 'L/min', num: 60, den: 1 },
+      { v: 'Lh', label: 'L/h', num: 1, den: 1 }
+    ],
+    WT_SOLVE: [
+      { v: 'dose', label: 'Dose (mg/L)' },
+      { v: 'flow', label: 'Chemical flow (for a target mg/L)' },
+      { v: 'water', label: 'Water flow' }
+    ],
+    WT_BASIS: [
+      { v: 'neat', label: 'Neat liquid as supplied' },
+      { v: 'madedown', label: 'Made-down solution (kg product per L water)' }
+    ],
+    WT_DOSE_UNIT: 'mg/L (ppm, mass per volume in water)',
+    WT_CONVENTION: 'Convention: a made-down solution is entered as kg neat product + L batch water; kg per L of batch water is treated as kg per L of solution (the product\u2019s own volume is ignored, negligible at field strengths).',
+    waterInputs: function () {
+      var s = this.state;
+      return { solve: s.wtSolve, waterFlow: s.wtWaterFlow, waterUnit: s.wtWaterUnit, basis: s.wtBasis, density: s.wtDensity, densitySource: s.wtDensitySource, batchKg: s.wtBatchKg, batchL: s.wtBatchL,
+        pumps: s.wtPumps, pumpUnit: s.wtPumpUnit, reading: s.wtReading, strength: s.wtStrength, strengthBasis: s.wtStrengthBasis, dose: s.wtDose, hours: s.wtHours };
+    },
+    computeWater: function () { return this.waterCalc(this.waterInputs()); },
+    wtInputSig: function () {
+      var s = this.state;
+      return JSON.stringify(['wtSolve', 'wtWaterFlow', 'wtWaterUnit', 'wtBasis', 'wtDensity', 'wtDensitySource', 'wtBatchKg', 'wtBatchL', 'wtPumps', 'wtPumpUnit', 'wtReading', 'wtStrength', 'wtStrengthBasis', 'wtDose', 'wtHours'].map(function (k) { return s[k]; }));
+    },
+    // Library densities follow the Dose page rule: liquid/emulsion products whose kg/L density is confirmed.
+    waterDensityChoices: function () {
+      var self = this;
+      return this.allProducts().filter(function (p) { return /^(liquid|emulsion)\b/i.test(p.form || '') && self.productDensityConfirmed(p); });
+    },
+    waterCalc: function (inp) {
+      var self = this, errors = [], cautions = [], notes = [], working = [];
+      var NUMS = ['qwLh', 'qwM3h', 'qwMLd', 'qwUnitValue', 'qcLh', 'qcUnitValue', 'conc', 'mgH', 'productKgH', 'productKgDay', 'chemLDay', 'doseMgL', 'volLperML', 'activeMgL', 'crossKgH', 'hours'];
+      var v = {}; NUMS.forEach(function (k) { v[k] = NaN; });
+      var err = function (field, text) { errors.push({ field: field, text: text }); };
+      var num = function (field, raw, label, opts) { var r = self.pcNumber(raw, label, opts); if (r.error) { err(field, r.error); return NaN; } return r.value; };
+      var raw = function (x) { return String(x == null ? '' : x).trim(); };
+      var F = function (n) { return self.pcFmt(n, 6); };
+      var solveOpt = this.pcOption(this.WT_SOLVE, inp.solve), solve = solveOpt ? solveOpt.v : '';
+      if (!solveOpt) err('solve', 'Solve-for choice is not recognised — choose what to calculate.');
+      var wUnit = this.pcOption(this.WT_WATER_UNITS, inp.waterUnit), pUnit = this.pumpUnitOf(inp.pumpUnit), basis = this.pcOption(this.WT_BASIS, inp.basis);
+      var wUnitMsg = function () { return raw(inp.waterUnit) ? 'Water flow unit is not recognised — choose ML/d, m³/d, m³/h, L/s, L/min or L/h.' : 'Water flow unit is not selected — choose ML/d, m³/d, m³/h, L/s, L/min or L/h. No unit is assumed.'; };
+      var pUnitMsg = function () { return raw(inp.pumpUnit) ? 'Pump flow unit is not recognised — choose L/h, L/min, L/s or mL/min.' : 'Pump flow unit is not selected — choose L/h, L/min, L/s or mL/min. No unit is assumed.'; };
+      var qw = NaN, qc = NaN, k = NaN, dose = NaN, bk = NaN, bl = NaN, hours, strength = NaN, lib = null;
+      if (solve !== 'water') { qw = num('waterFlow', inp.waterFlow, 'Water flow'); if (!wUnit) err('waterUnit', wUnitMsg()); else qw = qw * wUnit.num / wUnit.den; }
+      else if (raw(inp.waterUnit) && !wUnit) err('waterUnit', wUnitMsg());
+      if (!basis) err('basis', raw(inp.basis) ? 'Chemical basis is not recognised — choose Neat liquid as supplied or Made-down solution.' : 'Chemical basis is not selected — choose Neat liquid as supplied (needs the product density) or Made-down solution (kg product per L water). No basis is assumed.');
+      else if (basis.v === 'neat') {
+        if (raw(inp.densitySource)) {
+          var src = raw(inp.densitySource);
+          lib = this.waterDensityChoices().filter(function (p) { return p.id === src; })[0] || null;
+          if (!lib) err('densitySource', 'Density library product is not recognised or its density is not confirmed — enter the product density in kg/L.');
+        }
+        k = num('density', inp.density, 'Product density', { emptyHint: ' — enter the product density in kg/L (SG) from the CoA, delivery docket or a measurement. Without it only the volumetric dose (L/ML) is shown.' });
+        if (lib && isFinite(k) && k !== lib.density) { err('densitySource', 'Product density differs from the selected library value — re-select the library product or clear it to use the entered density.'); lib = null; }
+      } else {
+        // The density and its library source belong to the neat basis only (their controls are not rendered here):
+        // they are ignored, never validated or reported, and stay in the draft for a switch back to neat.
+        bk = num('batchKg', inp.batchKg, 'Neat product per batch'); bl = num('batchL', inp.batchL, 'Batch water volume');
+        k = bk / bl;
+      }
+      // dosing pumps: only Running rows are summed; Standby/off rows stay listed but excluded
+      var rows = Array.isArray(inp.pumps) ? inp.pumps : [], running = 0, sumEntered = 0, sumLh = 0, runParts = [], excluded = [], pumpsOk = true;
+      if (solve !== 'flow') {
+        if (!rows.length) { err('pumps', 'Add at least one pump row.'); pumpsOk = false; }
+        else if (rows.length > this.PC_MAX_PUMPS) { err('pumps', 'A maximum of 20 pump rows is supported — remove rows.'); pumpsOk = false; }
+        else {
+          rows.forEach(function (row, i) {
+            var n = i + 1, st = row && typeof row === 'object' ? row.status : undefined, flowRaw = row && typeof row === 'object' ? row.flow : '';
+            if (st === 'standby') { excluded.push({ n: n, text: raw(flowRaw) }); return; }
+            if (st !== 'running') { err('pumpStatus-' + n, 'Pump ' + n + ' status is not recognised — choose Running or Standby/off.'); pumpsOk = false; return; }
+            running++;
+            var x = num('pump-' + n, flowRaw, 'Pump ' + n + ' flow', { emptyHint: ' — enter its reading, set it to Standby/off or remove the row.', zeroHint: ' — set the pump to Standby/off if it is not running.' });
+            if (!isFinite(x)) { pumpsOk = false; return; }
+            runParts.push(raw(flowRaw)); sumEntered += x;
+            if (pUnit) sumLh += self.pumpFlowToLh(x, pUnit.v);
+          });
+          if (!running) { err('pumps', 'No pump is set to Running — at least one running pump is needed to total the chemical flow.'); pumpsOk = false; }
+        }
+        if (!pUnit) err('pumpUnit', pUnitMsg());
+        if (pumpsOk && pUnit) qc = sumLh;
+      } else if (raw(inp.pumpUnit) && !pUnit) err('pumpUnit', pUnitMsg());
+      if (solve !== 'dose') dose = num('dose', inp.dose, 'Target dose', { emptyHint: ' — enter the target dose in mg/L.' });
+      var blockingErrors = errors.slice(), blocking = errors.length;
+      // optional / daily-only inputs never block the dose
+      hours = num('hours', inp.hours, 'Run hours per day');
+      if (hours > 24) { err('hours', 'Run hours per day cannot exceed 24.'); hours = NaN; }
+      if (raw(inp.strength)) {
+        strength = num('strength', inp.strength, 'Strength');
+        if (strength > 100) { err('strength', 'Strength cannot exceed 100 %.'); strength = NaN; }
+      }
+      var label = raw(inp.strengthBasis), activeLabel = label ? label : 'active (basis not stated)';
+      var reading = this.pcOption(this.PC_READING, inp.reading);
+      if (solve !== 'flow') {
+        if (reading && reading.v === 'setpoint') cautions.push('Pump readings are setpoints or display values, not measured delivery: verify by drawdown or catch test before relying on this result.');
+        else if (!reading || reading.v !== 'measured') cautions.push('Pump reading type is unknown: verify actual delivery by drawdown or catch test before relying on this result.');
+      }
+      if (lib) notes.push('Product density ' + raw(inp.density) + ' kg/L is the product library typical value for ' + lib.name + ' (library range ' + lib.densityText + (lib.verified ? '; library status: ' + lib.verified : '') + '). Enter the SG from the CoA or delivery docket if it is known.');
+      if (!raw(inp.strength)) notes.push('Dose is mg of product ' + (basis && basis.v === 'madedown' ? 'as weighed into the make-down' : 'as supplied') + ' per L of water; enter strength % (w/w active) with its basis label to also show the active dose.');
+      var wLine = function () { return 'Water flow: ' + raw(inp.waterFlow) + ' ' + wUnit.label + (wUnit.den !== 1 ? ' × ' + wUnit.num + ' ÷ ' + wUnit.den : ' × ' + wUnit.num) + ' = ' + F(qw) + ' L/h (' + F(qw / 1000) + ' m³/h; ' + F(qw / 1000000) + ' ML/h)'; };
+      var pumpLines = function () {
+        var lines = ['Pumps: ' + running + ' of ' + rows.length + ' pumps running: ' + runParts.join(' + ') + ' = ' + F(sumEntered) + ' ' + pUnit.label + ' × ' + F(pUnit.num / pUnit.den) + ' = ' + F(qc) + ' L/h (total running chemical flow)'];
+        excluded.forEach(function (x) { lines.push('Pump ' + x.n + ': ' + (x.text ? x.text + ' ' + pUnit.label : '(blank)') + ' — standby/off, excluded from the total'); });
+        return lines;
+      };
+      var ok = !blocking, volOk = false;
+      if (ok) {
+        var mgH;
+        if (solve === 'dose') { mgH = qc * k * 1000000; dose = mgH / qw; }
+        else if (solve === 'flow') { mgH = dose * qw; qc = mgH / (k * 1000000); }
+        else { mgH = qc * k * 1000000; qw = mgH / dose; }
+        var kgH = qc * k, cross = (qw / 1000) * dose / 1000, vol = basis.v === 'neat' ? qc * 1000000 / qw : NaN;
+        var core = [qw, qc, k, mgH, dose, kgH, cross].concat(basis.v === 'neat' ? [vol] : []);
+        if (core.some(function (x) { return !isFinite(x) || !(x > 0); })) { ok = false; err('result', 'A derived value is outside the representable numeric range (overflow or underflow) — check the magnitudes entered. No result is shown.'); }
+      }
+      if (ok) {
+        v.qwLh = qw; v.qwM3h = qw / 1000; v.qwMLd = qw * 24 / 1000000; v.qwUnitValue = wUnit ? qw * wUnit.den / wUnit.num : NaN;
+        v.qcLh = qc; v.qcUnitValue = pUnit ? this.lhToPumpFlow(qc, pUnit.v) : NaN; v.conc = k; v.mgH = mgH; v.productKgH = kgH; v.doseMgL = dose; v.crossKgH = cross; v.volLperML = vol;
+        if (hours > 0) {
+          v.hours = hours; v.productKgDay = kgH * hours; v.chemLDay = qc * hours;
+          if (!(isFinite(v.productKgDay) && v.productKgDay > 0 && isFinite(v.chemLDay) && v.chemLDay > 0)) { v.productKgDay = v.chemLDay = NaN; err('hours', 'Daily totals are outside the representable numeric range — not shown.'); }
+        }
+        if (strength > 0) { v.activeMgL = dose * strength / 100; if (!(isFinite(v.activeMgL) && v.activeMgL > 0)) { v.activeMgL = NaN; err('strength', 'The active dose is outside the representable numeric range — not shown.'); } }
+        // ---- Show working ----
+        var kLines = basis.v === 'neat'
+          ? ['Product mass: ' + F(qc) + ' L/h × ' + raw(inp.density) + ' kg/L = ' + F(kgH) + ' kg/h (neat product, density ' + (lib ? 'library typical value' : 'entered') + ')']
+          : ['Solution strength: ' + raw(inp.batchKg) + ' kg ÷ ' + raw(inp.batchL) + ' L = ' + F(k) + ' kg/L (' + F(k * 100) + ' % w/v)', this.WT_CONVENTION, 'Product mass: ' + F(qc) + ' L/h × ' + F(k) + ' kg/L = ' + F(kgH) + ' kg/h'];
+        var mgLine = F(kgH) + ' kg/h × 1000000 = ' + F(mgH) + ' mg/h';
+        if (solve === 'dose') working = [wLine()].concat(pumpLines(), kLines, [mgLine, 'Dose: ' + F(mgH) + ' mg/h ÷ ' + F(qw) + ' L/h = ' + F(dose) + ' ' + this.WT_DOSE_UNIT]);
+        else if (solve === 'flow') working = [wLine(), 'Product needed: ' + raw(inp.dose) + ' mg/L × ' + F(qw) + ' L/h = ' + F(mgH) + ' mg/h = ' + F(kgH) + ' kg/h'].concat(basis.v === 'madedown' ? [kLines[0], this.WT_CONVENTION] : [],
+          ['Chemical flow: ' + F(kgH) + ' kg/h ÷ ' + F(k) + ' kg/L = ' + F(qc) + ' L/h' + (pUnit ? ' = ' + F(v.qcUnitValue) + ' ' + pUnit.label : '') + ' (total running ' + (basis.v === 'neat' ? 'neat product' : 'solution') + ' flow; no per-pump split)']);
+        else working = pumpLines().concat(kLines, [mgLine, 'Water flow: ' + F(mgH) + ' mg/h ÷ ' + raw(inp.dose) + ' mg/L = ' + F(qw) + ' L/h = ' + F(qw / 1000) + ' m³/h = ' + F(v.qwMLd) + ' ML/d' + (wUnit && wUnit.v !== 'MLd' && wUnit.v !== 'm3h' && wUnit.v !== 'Lh' ? ' = ' + F(v.qwUnitValue) + ' ' + wUnit.label : '')]);
+        if (basis.v === 'neat') working.push('Volumetric dose: ' + F(qc) + ' L/h ÷ ' + F(qw / 1000000) + ' ML/h = ' + F(vol) + ' L/ML (= ' + F(vol) + ' mL/m³)');
+        var agrees = Math.abs(cross - kgH) <= 1e-9 * kgH;
+        working.push('Cross-check: ' + F(qw / 1000) + ' m³/h × ' + F(dose) + ' mg/L ÷ 1000 = ' + F(cross) + ' kg/h — ' + (agrees ? 'agrees with the product kg/h' : 'DOES NOT agree with the product kg/h') + ' (Dose page formula kg/h = m³/h × mg/L ÷ 1000)');
+        if (isFinite(v.productKgDay)) working.push('Daily: ' + F(kgH) + ' kg/h × ' + raw(inp.hours) + ' h = ' + F(v.productKgDay) + ' kg/day; ' + F(qc) + ' L/h × ' + raw(inp.hours) + ' h = ' + F(v.chemLDay) + ' L/day of ' + (basis.v === 'neat' ? 'neat product' : 'solution'));
+        if (isFinite(v.activeMgL)) working.push('Active: ' + F(dose) + ' mg/L × ' + raw(inp.strength) + ' % = ' + F(v.activeMgL) + ' mg/L ' + activeLabel);
+      } else if (solve === 'dose' && basis && basis.v === 'neat' && blockingErrors.length && blockingErrors.every(function (e) { return e.field === 'density' || e.field === 'densitySource'; })) {
+        // density missing/invalid: the mass dose abstains; the volumetric dose needs only the two flows
+        var vol2 = qc * 1000000 / qw;
+        if (isFinite(vol2) && vol2 > 0) {
+          volOk = true; v.qwLh = qw; v.qwM3h = qw / 1000; v.qwMLd = qw * 24 / 1000000; v.qwUnitValue = wUnit ? qw * wUnit.den / wUnit.num : NaN; v.qcLh = qc; v.qcUnitValue = this.lhToPumpFlow(qc, pUnit.v); v.volLperML = vol2;
+          working = [wLine()].concat(pumpLines(), ['Volumetric dose: ' + F(qc) + ' L/h ÷ ' + F(qw / 1000000) + ' ML/h = ' + F(vol2) + ' L/ML (= ' + F(vol2) + ' mL/m³)', 'The mass dose (mg/L) needs the product density — not calculated.']);
+        }
+      }
+      // headline: the solved field
+      var hl = { label: { dose: 'Dose', flow: 'Chemical flow required', water: 'Water flow' }[solve] || 'Result', text: '—', unit: '' };
+      if (solve === 'dose') hl.unit = this.WT_DOSE_UNIT;
+      else if (solve === 'flow') hl.unit = pUnit ? pUnit.label + (ok ? ' (' + this.pcFmt(qc, 4) + ' L/h)' : '') : 'L/h' + (ok ? ' (choose a pump flow unit to also show L/min, L/s or mL/min)' : '');
+      else if (solve === 'water') hl.unit = (wUnit ? wUnit.label : 'L/h') + (ok ? ' (' + (wUnit ? this.pcFmt(qw, 4) + ' L/h; ' : '') + this.pcFmt(qw / 1000, 4) + ' m³/h)' : '');
+      if (ok) hl.text = this.pcFmt({ dose: dose, flow: pUnit ? v.qcUnitValue : qc, water: wUnit ? v.qwUnitValue : qw }[solve], 3);
+      else if (volOk) { hl.label = 'Volumetric dose'; hl.text = this.pcFmt(v.volLperML, 3); hl.unit = 'L/ML (= mL/m³) — the mg/L dose needs the product density'; }
+      return { ok: ok, volOk: volOk, solve: solve, errors: errors, warnings: [], cautions: cautions, notes: notes, working: working, v: v, headline: hl, library: lib,
+        pumpsRunning: solve === 'flow' ? NaN : running, pumpsTotal: solve === 'flow' ? NaN : rows.length, pumpsRunningEntered: sumEntered, excluded: excluded };
+    },
+    waterShareText: function (r, inp, build) {
+      var self = this, L = [], raw = function (x) { return String(x == null ? '' : x).trim(); }, F = function (n, sf) { return self.pcFmt(n, sf || 4); };
+      var solve = this.pcOption(this.WT_SOLVE, inp.solve), wUnit = this.pcOption(this.WT_WATER_UNITS, inp.waterUnit), pUnit = this.pumpUnitOf(inp.pumpUnit), basis = this.pcOption(this.WT_BASIS, inp.basis);
+      var reading = this.pcOption(this.PC_READING, inp.reading), v = r.v;
+      L.push('Field Assistant — Calculator: potable water dose (mg/L)');
+      L.push('Solved for: ' + (solve ? solve.label : 'not recognised'));
+      L.push(r.ok || r.volOk ? 'Result: ' + r.headline.text + ' ' + r.headline.unit + ' (' + r.headline.label + ')' : 'No result: ' + r.errors.map(function (e) { return e.text; }).join(' '));
+      if (!r.ok && r.volOk) L.push('Not calculated: ' + r.errors.map(function (e) { return e.text; }).join(' '));
+      L.push('Inputs:');
+      L.push('- Water flow: ' + (inp.solve === 'water' ? 'solved (see result)' : raw(inp.waterFlow) + ' ' + (wUnit ? wUnit.label : '[unit not selected]') + (isFinite(v.qwLh) ? ' (' + F(v.qwLh, 6) + ' L/h)' : '')));
+      L.push('- Chemical basis: ' + (basis ? basis.label : 'not selected'));
+      if (basis && basis.v === 'neat') L.push('- Product density: ' + (raw(inp.density) ? raw(inp.density) + ' kg/L' : 'not entered') + (r.library ? ' (library typical value: ' + r.library.name + ', range ' + r.library.densityText + ')' : raw(inp.density) ? ' (entered)' : ''));
+      if (basis && basis.v === 'madedown') L.push('- Make-down: ' + raw(inp.batchKg) + ' kg product in ' + raw(inp.batchL) + ' L water' + (r.ok ? ' = ' + F(v.conc, 6) + ' kg/L' : ''));
+      if (inp.solve === 'flow') L.push('- Pumps: solved as the total running chemical flow (no per-pump split); pump flow unit: ' + (pUnit ? pUnit.label : 'not selected'));
+      else {
+        L.push('- Pump flow unit: ' + (pUnit ? pUnit.label : 'not selected') + '; Reading type: ' + (reading ? reading.label : 'not recognised'));
+        var rows = Array.isArray(inp.pumps) ? inp.pumps : [];
+        L.push('- Pumps: ' + (isFinite(r.pumpsRunning) ? r.pumpsRunning : 0) + ' of ' + rows.length + ' pumps running' + (isFinite(v.qcLh) && pUnit ? '; Total running flow: ' + F(r.pumpsRunningEntered, 6) + ' ' + pUnit.label + ' (' + F(v.qcLh, 6) + ' L/h)' : ''));
+        rows.forEach(function (p, i) {
+          var t = p && typeof p === 'object' ? raw(p.flow) : '', st = p && typeof p === 'object' ? p.status : '';
+          L.push('  Pump ' + (i + 1) + ': ' + (t ? t + (pUnit ? ' ' + pUnit.label : '') : '(blank)') + (st === 'standby' ? ' — standby/off, excluded' : st === 'running' ? ' (running)' : ' (status not recognised)'));
+        });
+      }
+      L.push('- Strength: ' + (raw(inp.strength) ? raw(inp.strength) + ' % w/w ' + (raw(inp.strengthBasis) || 'active (basis not stated)') : 'not entered (dose is product, no active fraction assumed)'));
+      if (inp.solve !== 'dose') L.push('- Target dose: ' + raw(inp.dose) + ' mg/L');
+      L.push('- Run hours per day: ' + raw(inp.hours));
+      if (r.ok) {
+        L.push('Outputs:');
+        L.push('- Dose: ' + F(v.doseMgL, 6) + ' ' + this.WT_DOSE_UNIT);
+        if (isFinite(v.volLperML)) L.push('- Volumetric dose: ' + F(v.volLperML, 6) + ' L/ML (= ' + F(v.volLperML, 6) + ' mL/m³)');
+        if (isFinite(v.activeMgL)) L.push('- Active dose: ' + F(v.activeMgL, 6) + ' mg/L ' + (raw(inp.strengthBasis) || 'active (basis not stated)') + ' (from the entered ' + raw(inp.strength) + ' %)');
+        L.push('- Water flow: ' + F(v.qwLh, 6) + ' L/h (' + F(v.qwM3h) + ' m³/h; ' + F(v.qwMLd) + ' ML/d)');
+        L.push('- Chemical flow (total running): ' + F(v.qcLh) + ' L/h' + (pUnit ? ' (' + F(v.qcUnitValue) + ' ' + pUnit.label + ')' : ''));
+        L.push('- Product: ' + F(v.productKgH) + ' kg/h' + (isFinite(v.productKgDay) ? '; ' + F(v.productKgDay) + ' kg/day; ' + F(v.chemLDay) + ' L/day' : '; per day not calculated'));
+      } else if (r.volOk) L.push('Outputs:', '- Volumetric dose: ' + F(v.volLperML, 6) + ' L/ML (= ' + F(v.volLperML, 6) + ' mL/m³)');
+      var flags = r.cautions.concat(r.ok ? r.errors.map(function (e) { return e.text; }) : [], r.notes);
+      if (flags.length) { L.push('Flags and notes:'); flags.forEach(function (t) { L.push('- ' + t); }); }
+      if (basis && basis.v === 'madedown') L.push(this.WT_CONVENTION);
+      L.push('No typical or expected dose range is applied; results are not an approval of the dose.');
+      L.push('BUILD: ' + (build && build.status === 'ok' ? build.build + ' (release that served this app session)' : build && build.status === 'none' ? 'not available (app opened before the offline release was installed; reopen the app to include it)' : 'not available (the serving release could not be confirmed)'));
+      var d = new Date(), p2 = function (n) { return (n < 10 ? '0' : '') + n; }, off = -d.getTimezoneOffset();
+      L.push('Generated: ' + d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()) + ' ' + p2(d.getHours()) + ':' + p2(d.getMinutes()) + ' (UTC' + (off >= 0 ? '+' : '-') + p2(Math.floor(Math.abs(off) / 60)) + ':' + p2(Math.abs(off) % 60) + ')');
+      return L.join('\n');
+    },
+
     // ---- Guide tab maths ------------------------------------------------------
     // Potable demand snapshot. The band thresholds are ILLUSTRATIVE demo values
     // (rendered with an EXAMPLE badge) — calibrate against site jar-test history.
@@ -1115,6 +1590,9 @@
       if (s.showClientForm || s.showProductForm || s.showPumpForm || s.showJarSave || String(s.guideSaveName || '').trim()) return true;
       // Conservative: a changed calculation can include memory-only catch inputs.
       if (this.calcInputSig() !== this._initialCalcSig) return true;
+      // Calculator inputs are a memory-only draft (no save path): any change from the defaults is retained.
+      if (this.polyInputSig() !== this._initialPolySig) return true;
+      if (this.wtInputSig() !== this._initialWtSig) return true;
       for (var k in s.guideReadings) {
         if ((String(s.guideReadings[k] || '').trim() || Object.prototype.hasOwnProperty.call(snap.readings, k)) && snap.readings[k] !== s.guideReadings[k]) return true;
       }
@@ -1196,6 +1674,8 @@
   };
 
   App._initialCalcSig = App.calcInputSig();
+  App._initialPolySig = App.polyInputSig();
+  App._initialWtSig = App.wtInputSig();
   App._initialJarsSetupSig = App.jarsSetupSig();
 
   // ============================ HANDLERS =====================================
@@ -1206,6 +1686,128 @@
     goJars: function () { App.setState({ screen: 'jars' }); },
     goPumps: function () { App.setState({ screen: 'pumps' }); },
     goClients: function () { App.setState({ screen: 'clients' }); },
+    goCalculator: function () { App.setState({ screen: 'calculator' }); },
+
+    // Calculator (polymer dose solver): pump rows start at one, cap at 20, never fewer than one.
+    addPcPump: function () {
+      var rows = App.state.pcPumps;
+      if (rows.length >= App.PC_MAX_PUMPS) { App.setState({ pcPumpMsg: 'Maximum of 20 pumps reached — remove a row before adding another.' }); return; }
+      App._focusKey = 'pcPump-' + rows.length;
+      App.setState({ pcPumps: rows.concat([{ flow: '', status: 'running' }]), pcPumpMsg: '' });
+    },
+    removePcPump: function (el) {
+      var rows = App.state.pcPumps, i = +el.dataset.i;
+      if (rows.length <= 1 || !(i >= 0 && i < rows.length)) return;
+      App.setState({ pcPumps: rows.slice(0, i).concat(rows.slice(i + 1)), pcPumpMsg: '' });
+    },
+    onPcPump: function (el) {
+      var rows = App.state.pcPumps.slice(), i = +el.dataset.i;
+      if (!(i >= 0 && i < rows.length)) return;
+      rows[i] = { flow: el.value, status: rows[i].status };
+      App.setState({ pcPumps: rows });
+    },
+    onPcPumpStatus: function (el) {
+      var rows = App.state.pcPumps.slice(), i = +el.dataset.i;
+      if (!(i >= 0 && i < rows.length)) return;
+      rows[i] = { flow: rows[i].flow, status: el.value };
+      App.setState({ pcPumps: rows });
+    },
+    onPcSg: function (el) { App.setState({ pcSg: el.value, pcSgEntered: true }); },
+    togglePcAdvanced: function () { App.setState({ pcShowAdvanced: !App.state.pcShowAdvanced }); },
+    togglePcWorking: function () { App.setState({ pcShowWorking: !App.state.pcShowWorking }); },
+    // Share / copy the results text: the same fallback chain as backups (share -> clipboard -> visible text).
+    // Success is claimed only when the browser reports it; a cancelled share sends nothing.
+    sharePcResults: function () {
+      var text = App.polyShareText(App.computePoly(), App.polyInputs(), App._build);
+      try {
+        if (navigator.share && (!navigator.canShare || navigator.canShare({ text: text }))) {
+          navigator.share({ text: text }).then(function () {
+            App.setState({ pcShareMsg: 'Results shared.', pcShareText: '' });
+          }, function (err) {
+            if (err && err.name === 'AbortError') App.setState({ pcShareMsg: 'Share cancelled. Nothing was sent.', pcShareText: '' });
+            else App.H.copyPcResults();
+          });
+          return;
+        }
+      } catch (e) {}
+      App.H.copyPcResults();
+    },
+    copyPcResults: function () {
+      var text = App.polyShareText(App.computePoly(), App.polyInputs(), App._build);
+      var manual = function () { App.setState({ pcShareMsg: 'Select all the text below and copy it.', pcShareText: text }); };
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(function () { App.setState({ pcShareMsg: 'Results copied. Paste them into a message or report.', pcShareText: '' }); }, manual);
+          return;
+        }
+      } catch (e) {}
+      manual();
+    },
+    dismissPcShareText: function () { App.setState({ pcShareText: '', pcShareMsg: '' }); },
+
+    // Calculator mode selector: each mode keeps its own in-memory draft; switching never mixes outputs.
+    onCcSludge: function () { App.setState({ ccMode: 'sludge' }); },
+    onCcWater: function () { App.setState({ ccMode: 'water' }); },
+    // Water treatment dose: the same pump-list rules as the sludge mode, on its own state.
+    addWtPump: function () {
+      var rows = App.state.wtPumps;
+      if (rows.length >= App.PC_MAX_PUMPS) { App.setState({ wtPumpMsg: 'Maximum of 20 pumps reached — remove a row before adding another.' }); return; }
+      App._focusKey = 'wtPump-' + rows.length;
+      App.setState({ wtPumps: rows.concat([{ flow: '', status: 'running' }]), wtPumpMsg: '' });
+    },
+    removeWtPump: function (el) {
+      var rows = App.state.wtPumps, i = +el.dataset.i;
+      if (rows.length <= 1 || !(i >= 0 && i < rows.length)) return;
+      App.setState({ wtPumps: rows.slice(0, i).concat(rows.slice(i + 1)), wtPumpMsg: '' });
+    },
+    onWtPump: function (el) {
+      var rows = App.state.wtPumps.slice(), i = +el.dataset.i;
+      if (!(i >= 0 && i < rows.length)) return;
+      rows[i] = { flow: el.value, status: rows[i].status };
+      App.setState({ wtPumps: rows });
+    },
+    onWtPumpStatus: function (el) {
+      var rows = App.state.wtPumps.slice(), i = +el.dataset.i;
+      if (!(i >= 0 && i < rows.length)) return;
+      rows[i] = { flow: rows[i].flow, status: el.value };
+      App.setState({ wtPumps: rows });
+    },
+    // Typing a density makes it an entered value; a library density is taken only from a confirmed product.
+    onWtDensity: function (el) { App.setState({ wtDensity: el.value, wtDensitySource: '' }); },
+    onWtDensitySource: function (el) {
+      var id = String(el.value || ''), p = id ? App.waterDensityChoices().filter(function (x) { return x.id === id; })[0] : null;
+      if (!p) { App.setState({ wtDensitySource: '' }); return; }
+      App.setState({ wtDensitySource: p.id, wtDensity: String(p.density) });
+    },
+    toggleWtAdvanced: function () { App.setState({ wtShowAdvanced: !App.state.wtShowAdvanced }); },
+    toggleWtWorking: function () { App.setState({ wtShowWorking: !App.state.wtShowWorking }); },
+    shareWtResults: function () {
+      var text = App.waterShareText(App.computeWater(), App.waterInputs(), App._build);
+      try {
+        if (navigator.share && (!navigator.canShare || navigator.canShare({ text: text }))) {
+          navigator.share({ text: text }).then(function () {
+            App.setState({ wtShareMsg: 'Results shared.', wtShareText: '' });
+          }, function (err) {
+            if (err && err.name === 'AbortError') App.setState({ wtShareMsg: 'Share cancelled. Nothing was sent.', wtShareText: '' });
+            else App.H.copyWtResults();
+          });
+          return;
+        }
+      } catch (e) {}
+      App.H.copyWtResults();
+    },
+    copyWtResults: function () {
+      var text = App.waterShareText(App.computeWater(), App.waterInputs(), App._build);
+      var manual = function () { App.setState({ wtShareMsg: 'Select all the text below and copy it.', wtShareText: text }); };
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(function () { App.setState({ wtShareMsg: 'Results copied. Paste them into a message or report.', wtShareText: '' }); }, manual);
+          return;
+        }
+      } catch (e) {}
+      manual();
+    },
+    dismissWtShareText: function () { App.setState({ wtShareText: '', wtShareMsg: '' }); },
 
     // guide (field playbooks)
     goGuide: function () { App.setState({ screen: 'guide', guideId: null, productId: null }); },
@@ -1874,6 +2476,23 @@
     dismissBackupText: function () { App.setState({ backupText: '' }); }
   };
 
+  // Which release served this page, asked once at start-up of the worker that controls it (for the
+  // Calculator share text). A later controller change cannot relabel code that is already running.
+  App._build = { status: 'pending' };
+  App.queryBuild = function () {
+    var self = this;
+    try {
+      var sw = navigator.serviceWorker, ctl = sw && sw.controller;
+      if (!ctl || typeof MessageChannel !== 'function') { this._build = { status: 'none' }; return; }
+      var done = false, ch = new MessageChannel();
+      var finish = function (b) { if (!done) { done = true; self._build = b; } };
+      sw.addEventListener('controllerchange', function () { finish({ status: 'unknown' }); });
+      ch.port1.onmessage = function (e) { var d = e && e.data; finish(d && d.type === 'fa-build' && /^[0-9a-f]{12}$/.test(d.build) ? { status: 'ok', build: d.build } : { status: 'unknown' }); };
+      ctl.postMessage({ type: 'fa-build' }, [ch.port2]);
+      setTimeout(function () { finish({ status: 'unknown' }); }, 10000);
+    } catch (e) { this._build = { status: 'unknown' }; }
+  };
+
   App.markBackup = function () {
     if (this._restoreRecovery) return; // recovery export must not mutate original metadata
     var now = new Date().toISOString();
@@ -1911,6 +2530,7 @@
     App.load();
     try { App.state.lastBackup = localStorage.getItem('ctf_last_backup_v1') || ''; } catch (e) {}
     App.mount();
+    App.queryBuild();
     App.requestPersistentStorage();
   });
 })();

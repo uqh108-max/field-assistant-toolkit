@@ -250,7 +250,7 @@
     return {
       screen: screen, detail: detail,
       isHome: screen === 'home', isProducts: screen === 'products' && !s.productId, isProductDetail: detail,
-      isCalc: screen === 'calc', isJars: screen === 'jars', isPumps: screen === 'pumps', isClients: screen === 'clients',
+      isCalc: screen === 'calc', isCalculator: screen === 'calculator', isJars: screen === 'jars', isPumps: screen === 'pumps', isClients: screen === 'clients',
       isGuide: screen === 'guide' && !s.guideId, isGuideDetail: screen === 'guide' && !!s.guideId,
       guide: (window.PLAYBOOKS && window.PLAYBOOKS.list.find(function (g) { return g.id === s.guideId; })) || null,
       allProducts: allProducts, allPumps: allPumps,
@@ -263,6 +263,8 @@
       winnerN: winnerJar ? (s.winner + 1) : '', winnerPpm: this.fmt(winnerPpmNum, 2),
       pumpRows: pumpRows,
       noPumpMatch: pumpRows.length === 0 && s.pumpQuery.trim().length > 0 && !s.pumpLoading,
+      pc: screen === 'calculator' && s.ccMode !== 'water' ? this.computePoly() : null,
+      wt: screen === 'calculator' && s.ccMode === 'water' ? this.computeWater() : null,
       calc: calc, cal: cal, doseWin: screen === 'calc' ? this.doseWindow() : null,
       calcPumpChosen: !!s.selectedCalcPumpId, calcPumpInfo: calcPumpInfo,
       productPickerOpen: s.productPickerOpen, productPickerQuery: s.productPickerQuery,
@@ -300,6 +302,7 @@
       navHomeStyle: css(this.navStyle(screen === 'home')),
       navProductsStyle: css(this.navStyle(screen === 'products')),
       navCalcStyle: css(this.navStyle(screen === 'calc')),
+      navCalculatorStyle: css(this.navStyle(screen === 'calculator')),
       navJarsStyle: css(this.navStyle(screen === 'jars')),
       navPumpsStyle: css(this.navStyle(screen === 'pumps')),
       navGuideStyle: css(this.navStyle(screen === 'guide'))
@@ -1147,6 +1150,278 @@
     '</div>';
   };
 
+  // ============================ CALCULATOR: polymer dose solver ==============
+  // Built only from existing components (markup/style strings copied verbatim from their source screens):
+  //   Dose page: top-level field block, caption, flow input + embedded unit select (+ "used in calc" line),
+  //     white field with suffix, cards (Feed preparation / Dosing pump), in-card cream fields, label-wrapped
+  //     select, "Show pump flow in" row, Results panel (header + resCell + rowKV rows), warning stack,
+  //     "How this works" and "Basis & assumptions" notes.
+  //   Jars: intro text, list heading, row cards, "+ Add jar" / "– Remove last" buttons, step-list panel.
+  //   Clients: backup Save/Copy pair (share/copy action) and the "Restore from a backup…" disclosure toggle.
+  // Every numeric input is inputmode=decimal (16px via the global token); every control has an exact name.
+  var PC_MONO = 'font-family:ui-monospace, SFMono-Regular, Consolas, monospace;';
+  var PC_CAP_TOP = 'font-size:12px;font-weight:700;color:#4B564F;margin-bottom:5px;';      // Dose sludge/conc block caption
+  var PC_CAP_CARD = 'font-size:12px;font-weight:700;color:#4B564F;margin-bottom:4px;';     // Dose Feed preparation caption
+  var PC_CARD = 'background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;'; // Dose cards
+  var PC_CARD_HEAD = 'font-size:12px;font-weight:700;color:#4B564F;margin-bottom:10px;';   // Dose card heading
+  var PC_SUFFIX = 'position:absolute;top:50%;transform:translateY(-50%);font-size:12px;color:#526159;font-weight:600;';
+  var PC_HELP = 'font-size:12px;color:#56635B;margin-top:6px;';                             // Dose pump-capacity helper
+  var PC_JAR_BTN = 'flex:1;border:1px solid #D8D2C4;background:#FFF;cursor:pointer;border-radius:11px;padding:11px;font-size:14px;font-weight:700;'; // Jars add/remove
+  var PC_BACKUP_BTN = 'flex:1;border:1px solid #087568;cursor:pointer;background:#FFF;color:#087568;border-radius:11px;padding:11px 8px;font-size:14px;font-weight:700;'; // Clients backup pair
+  var PC_DISCLOSURE = 'margin-top:9px;width:100%;border:1px dashed #D8D2C4;cursor:pointer;background:#FBF9F4;color:#16211F;border-radius:11px;padding:10px;font-size:14px;font-weight:600;min-height:44px;'; // Clients restore toggle (+44px target)
+  function pcSuffixPad(suffix, base) { return { '%': 34, '% DS': 44, 'kg/L': 44, 'kg': 40, 'L': 34, 'h/day': 52, 'kg/t DS': 64 }[suffix] || base; }
+  // white top-level field (Dose "Dry solids" / "Polymer dose")
+  function pcTopInput(key, val, aria, suffix, text) {
+    return '<div style="position:relative;"><input ' + (text ? '' : 'inputmode="decimal" ') + 'autocomplete="off" data-set="' + key + '" data-key="' + key + '" aria-label="' + esc(aria) + '" value="' + esc(val) + '"' + (text ? ' placeholder="' + esc(text) + '"' : '') + ' style="width:100%;background:#FFF;border:1px solid #D8D2C4;border-radius:12px;padding:13px ' + (suffix ? pcSuffixPad(suffix, 44) + 'px' : '13px') + ' 13px 13px;font-size:16px;' + (text ? '' : PC_MONO) + 'font-weight:600;">' +
+      (suffix ? '<span style="' + PC_SUFFIX + 'right:13px;">' + suffix + '</span>' : '') + '</div>';
+  }
+  // cream in-card field (Dose "Solution strength" / "Neat density")
+  function pcCardInput(key, val, aria, suffix, act, i) {
+    var bind = act ? 'data-actinput="' + act + '"' + (i != null ? ' data-i="' + i + '"' : '') : 'data-set="' + key + '"';
+    return '<div style="position:relative;"><input inputmode="decimal" autocomplete="off" ' + bind + ' data-key="' + key + '" aria-label="' + esc(aria) + '" value="' + esc(val) + '" style="width:100%;background:#FBF9F4;border:1px solid #D8D2C4;border-radius:10px;padding:11px ' + pcSuffixPad(suffix, 34) + 'px 11px 11px;font-size:16px;' + PC_MONO + 'font-weight:600;">' +
+      '<span style="' + PC_SUFFIX + 'right:11px;">' + suffix + '</span></div>';
+  }
+  // embedded unit select (Dose flowUnitSel / pumpUnitSel): "Confirm unit" only while no unit is chosen
+  function pcUnitSelect(key, list, cur, aria) {
+    var known = !!App.pcOption(list, cur);
+    return '<select data-set="' + key + '" data-key="' + key + '" aria-label="' + esc(aria) + '" style="border:none;border-left:1px solid #E2DDD0;background:#F6F3EC;padding:0 30px 0 13px;font-size:14px;font-weight:700;color:#4B564F;appearance:none;cursor:pointer;background-image:' + DOWNARROW + ';background-repeat:no-repeat;background-position:right 11px center;">' +
+      (known ? '' : '<option value="" selected>Confirm unit</option>') + list.map(function (x) { return '<option value="' + esc(x.v) + '"' + (x.v === cur ? ' selected' : '') + '>' + esc(x.label) + '</option>'; }).join('') + '</select>';
+  }
+  // label-wrapped select (Dose "Feed basis")
+  function pcLabelSelect(caption, key, list, cur, aria, act, i, placeholder) {
+    var bind = act ? 'data-actchange="' + act + '"' + (i != null ? ' data-i="' + i + '"' : '') : 'data-set="' + key + '"';
+    var known = !!App.pcOption(list, cur);
+    if (!known && placeholder && !cur) return '<label>' + caption + ' <select ' + bind + ' data-key="' + key + '" aria-label="' + esc(aria) + '" style="width:100%;"><option value="" selected>' + esc(placeholder) + '</option>' +
+      list.map(function (x) { return '<option value="' + esc(x.v) + '">' + esc(x.label) + '</option>'; }).join('') + '</select></label>';
+    // width:100% only matters for short-option selects, which styleNativeControls leaves unwrapped (its
+    // .fa-select-field rule gives the same 100% width to every select with an option longer than 8 characters).
+    return '<label>' + caption + ' <select ' + bind + ' data-key="' + key + '" aria-label="' + esc(aria) + '" style="width:100%;">' + (known ? '' : '<option value="" selected>Not recognised</option>') +
+      list.map(function (x) { return '<option value="' + esc(x.v) + '"' + (x.v === cur ? ' selected' : '') + '>' + esc(x.label) + '</option>'; }).join('') + '</select></label>';
+  }
+  // Shared pump-row component (Jars row cards): k = state/key prefix ('pc' sludge, 'wt' water), A = handler infix.
+  function pumpCards(rows, unitCode, k, A) {
+    var unit = App.pumpFlowLabel(unitCode) || 'unit';
+    return rows.map(function (r, i) {
+      var n = i + 1, standby = r && r.status === 'standby';
+      return '<div data-' + k + '-pump-row="' + i + '" style="background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:12px 13px;">' +
+        '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;"><div style="font-size:14px;font-weight:700;white-space:nowrap;flex-shrink:0;">Pump ' + n + '</div>' +
+        (standby ? '<div style="font-size:12px;color:#526159;min-width:0;">excluded from the total</div>' : '') +
+        (rows.length > 1 ? '<button type="button" data-act="remove' + A + 'Pump" data-i="' + i + '" aria-label="Remove pump ' + n + '" style="margin-left:auto;' + PC_JAR_BTN + 'flex:0 0 auto;color:#56635B;">– Remove</button>' : '') + '</div>' +
+        // two columns while each can show "Standby/off" unclipped (>=140px); below ~354px viewport they stack
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:10px;align-items:start;">' +
+          '<div><div style="' + PC_CAP_TOP + '">Flow</div>' + pcCardInput(k + 'Pump-' + i, r ? r.flow : '', 'Pump ' + n + ' flow', unit, 'on' + A + 'Pump', i) + '</div>' +
+          '<div>' + pcLabelSelect('Status', k + 'PumpStatus-' + i, App.PC_PUMP_STATUS, r ? r.status : '', 'Pump ' + n + ' status', 'on' + A + 'PumpStatus', i) + '</div>' +
+        '</div></div>';
+    }).join('');
+  }
+  function pcPumpCards(s) { return pumpCards(s.pcPumps, s.pcPumpUnit, 'pc', 'Pc'); }
+  // Calculator mode switch: the Dose page segmented mode switch, with group/pressed semantics and exact names.
+  function ccModeSwitch(mode) {
+    var sub = '<div style="font-size:12px;font-weight:400;opacity:1;">';
+    return '<div data-cc-mode role="group" aria-label="Calculator mode" style="display:flex;background:#E4DFD3;border-radius:12px;padding:3px;gap:3px;">' +
+      '<button type="button" data-act="onCcSludge" aria-pressed="' + (mode !== 'water') + '" aria-label="Sludge dewatering (kg/t DS)" style="' + css(App.segStyle(mode !== 'water')) + '">Sludge dewatering' + sub + 'kg/t DS</div></button>' +
+      '<button type="button" data-act="onCcWater" aria-pressed="' + (mode === 'water') + '" aria-label="Potable water (mg/L)" style="' + css(App.segStyle(mode === 'water')) + '">Potable water' + sub + 'mg/L</div></button></div>';
+  }
+  function pcResCell(label, val, sub, attrs) {   // Dose resCell
+    attrs = attrs || {};
+    return '<div><div' + (attrs.label || '') + ' style="font-size:12px;color:#A6BEB3;font-weight:600;">' + esc(label) + '</div>' +
+      '<div' + (attrs.value || '') + ' style="' + PC_MONO + 'font-size:24px;line-height:1.25;font-weight:600;color:#4FE0B5;letter-spacing:-0.01em;overflow-wrap:anywhere;word-wrap:break-word;">' + esc(val) + '</div>' +
+      '<div' + (attrs.sub || '') + ' style="font-size:12px;color:#9FB0AA;">' + esc(sub) + '</div></div>';
+  }
+  App.screens.calculator = function (v) {
+    var water = App.state.ccMode === 'water';
+    return '<div style="padding:22px 18px 30px;">' +
+      '<div style="font-size:12px;letter-spacing:0.14em;text-transform:uppercase;color:#087568;font-weight:700;">Calculator</div>' +
+      // Dose page header: eyebrow, title, then the mode switch. Both mode titles fit one line from 320px, so the
+      // switch sits exactly where the Dose page switch sits and never moves when the mode changes.
+      '<div style="font-size:24px;line-height:1.25;font-weight:700;letter-spacing:-0.02em;margin:2px 0 12px;">' + (water ? 'Dose — potable water' : 'Polymer dose — sludge') + '</div>' +
+      ccModeSwitch(App.state.ccMode) +
+      (water ? waterBody(v) : sludgeBody(v)) + '</div>';
+  };
+  function sludgeBody(v) {
+    var s = App.state, r = v.pc, solve = s.pcSolve, x = r.v, F4 = function (n) { return App.pcFmt(n, 4); };
+    var sUnit = App.pcOption(App.PC_SLUDGE_UNITS, s.pcSludgeUnit), pUnit = App.pumpUnitOf(s.pcPumpUnit);
+    // ---- top-level sludge fields (Dose sludge block) ----
+    var flowField = solve !== 'sludge'
+      ? '<div><div style="' + PC_CAP_TOP + '">Sludge flow</div><div style="display:flex;border:1px solid #D8D2C4;border-radius:12px;background:#FFF;overflow:hidden;"><input inputmode="decimal" autocomplete="off" data-set="pcSludgeFlow" data-key="pcSludgeFlow" aria-label="Sludge flow" value="' + esc(s.pcSludgeFlow) + '" style="flex:1;min-width:0;border:none;background:transparent;padding:13px;font-size:16px;' + PC_MONO + 'font-weight:600;">' + pcUnitSelect('pcSludgeUnit', App.PC_SLUDGE_UNITS, s.pcSludgeUnit, 'Sludge flow unit') + '</div>' +
+        (r.ok && sUnit && sUnit.v !== 'Lh' ? '<div style="font-size:12px;color:#526159;margin-top:5px;' + PC_MONO + '">= ' + esc(F4(x.qsLh)) + ' L/h used in calc</div>' : '') + '</div>'
+      : '<div>' + pcLabelSelect('Sludge flow unit', 'pcSludgeUnit', App.PC_SLUDGE_UNITS, s.pcSludgeUnit, 'Sludge flow unit', null, null, 'Confirm unit') + '<div style="' + PC_HELP + '">Sludge flow is being solved; the result is shown in this unit.</div></div>';
+    var dsCell = solve !== 'ds' ? '<div><div style="' + PC_CAP_TOP + '">Dry solids (%)</div>' + pcTopInput('pcDs', s.pcDs, 'Dry solids (%)', '% DS') + '</div>' : '';
+    var doseCell = solve !== 'dose' ? '<div><div style="' + PC_CAP_TOP + '">Target dose</div>' + pcTopInput('pcDose', s.pcDose, 'Target dose (kg product per t DS)', 'kg/t DS') + '</div>' : '';
+    var topBlock = '<div style="margin-top:12px;display:flex;flex-direction:column;gap:10px;">' + flowField +
+      ((dsCell || doseCell) ? '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;">' + dsCell + doseCell + '</div>' : '') +
+      '<div><div style="' + PC_CAP_TOP + '">DS sample location (optional)</div>' + pcTopInput('pcDsLocation', s.pcDsLocation, 'DS sample location (optional)', '', 'e.g. press feed, thickener, digester') + '</div>' +
+      '<div style="' + PC_HELP + 'margin-top:0;">Dry solids is % w/w of the wet sludge' + (solve === 'ds' ? ' and is being solved' : '') + '. Use DS from the same point as the sludge flow (normally the press feed).</div></div>';
+    // ---- Make-down card (Dose Feed preparation card) ----
+    var makeCard = '<div style="margin-top:14px;' + PC_CARD + '"><div style="' + PC_CARD_HEAD + '">Make-down (batch)</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;">' +
+        (solve !== 'batch' ? '<div><div style="' + PC_CAP_CARD + '">Neat product per batch</div>' + pcCardInput('pcBatchKg', s.pcBatchKg, 'Neat product per batch (kg)', 'kg') + '</div>' : '') +
+        '<div><div style="' + PC_CAP_CARD + '">Batch water volume</div>' + pcCardInput('pcBatchL', s.pcBatchL, 'Batch water volume (L)', 'L') + '</div></div>' +
+      (r.ok ? '<div data-pc-help style="' + PC_HELP + '">= ' + esc(F4(x.c)) + ' kg/L · ' + esc(F4(x.cPctWV)) + ' % w/v · ' + esc(F4(x.kgPer1000)) + ' kg per 1000 L</div>' : '') +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:start;margin-top:10px;">' +
+        '<div>' + pcLabelSelect('Product form', 'pcForm', App.PC_FORMS, s.pcForm, 'Product form') + '</div>' +
+        '<div><div style="' + PC_CAP_TOP + '">Active content</div>' + pcCardInput('pcActive', s.pcActive, 'Active content (%) (optional)', '%') + '</div></div>' +
+      '<div style="margin-top:8px;font-size:12px;color:#526159;">' + (solve === 'batch' ? 'Batch strength is being solved: kg of product per batch is a result. ' : '') + 'kg per L of batch water is treated as kg per L of solution (negligible at field strengths). The dose is kg of product as made down; no active fraction is assumed for any form. Active content is optional: enter it from the supplier TDS/CoA to also see kg active.</div></div>';
+    // ---- Pumps card (Dose Dosing pump card) + pump rows (Jars list) ----
+    // required unit: the stacked label-wrapped field (as Reading type), never an inline caption beside a narrow select
+    var pumpUnitRow = '<div style="margin-top:10px;">' + pcLabelSelect('Pump flow unit', 'pcPumpUnit', App.PUMP_FLOW_UNITS, s.pcPumpUnit, 'Pump flow unit', null, null, 'Confirm unit') + '</div>';
+    var pumpsCard = '<div style="margin-top:12px;' + PC_CARD + '"><div style="' + PC_CARD_HEAD + '">Polymer pumps</div>' +
+      (solve === 'flow'
+        ? '<div style="' + PC_HELP + 'margin-top:0;">The total running polymer solution flow is being solved — no per-pump split; pump readings are not used. The result is shown in the pump flow unit.</div>' + pumpUnitRow
+        : pcLabelSelect('Reading type', 'pcReading', App.PC_READING, s.pcReading, 'Pump reading type') + pumpUnitRow +
+          (s.pcReading !== 'measured' ? '<div style="' + PC_HELP + '">Not a measured reading: verify actual delivery by drawdown or catch test.</div>' : '') +
+          '<div style="' + PC_HELP + '">Only Running pumps are summed; Standby/off rows stay listed but are excluded. Rows: ' + s.pcPumps.length + ' of ' + App.PC_MAX_PUMPS + '.' + (r.ok ? ' Running total ' + esc(App.pcFmt(r.pumpsRunningEntered, 6)) + ' ' + esc(pUnit.label) + ' = ' + esc(F4(x.qpLh)) + ' L/h.' : '') + '</div>') + '</div>';
+    var pumpList = solve === 'flow' ? '' :
+      '<div style="margin-top:15px;display:flex;align-items:center;justify-content:space-between;"><div style="font-size:14px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:#56635B;">Pumps</div><div style="font-size:12px;color:#526159;">' + (isFinite(r.pumpsRunning) ? r.pumpsRunning : 0) + ' of ' + s.pcPumps.length + ' running</div></div>' +
+      '<div style="margin-top:9px;display:flex;flex-direction:column;gap:10px;">' + pcPumpCards(s) + '</div>' +
+      '<div style="margin-top:11px;display:flex;gap:9px;"><button type="button" data-act="addPcPump" style="' + PC_JAR_BTN + 'color:#16211F;"><span aria-hidden="true">+ </span>Add pump</button></div>' +
+      (s.pcPumpMsg ? '<div data-pc-pump-msg role="status" class="fa-note" style="margin-top:8px;">' + esc(s.pcPumpMsg) + '</div>' : '');
+    // ---- Advanced (disclosure + Dose card) ----
+    var advanced = '<button type="button" data-act="togglePcAdvanced" aria-expanded="' + (s.pcShowAdvanced ? 'true' : 'false') + '" aria-controls="fa-pc-advanced" style="' + PC_DISCLOSURE + 'margin-top:14px;">Advanced: sludge SG and run hours</button>' +
+      (s.pcShowAdvanced ? '<div id="fa-pc-advanced" style="margin-top:12px;' + PC_CARD + '"><div style="' + PC_CARD_HEAD + '">Advanced</div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;">' +
+          '<div><div style="' + PC_CAP_CARD + '">Sludge SG</div>' + pcCardInput('pcSg', s.pcSg, 'Sludge SG (kg/L)', 'kg/L', 'onPcSg') + '</div>' +
+          '<div><div style="' + PC_CAP_CARD + '">Run hours per day</div>' + pcCardInput('pcHours', s.pcHours, 'Run hours per day', 'h/day') + '</div></div>' +
+        '<div style="margin-top:8px;font-size:12px;color:#526159;">SG is prefilled 1.0 and labelled assumed in the results until you change it. Run hours are used only for the daily totals.</div></div>' : '');
+    // ---- Results panel (Dose) ----
+    var grid = '', rows = '';
+    if (r.ok) {
+      if (solve !== 'dose') grid += pcResCell('Dose', F4(x.dose), 'kg product / t DS (target)');
+      if (solve !== 'ds') grid += pcResCell('Dry solids load', F4(x.tdsH), 't DS/h · ' + F4(x.kgDsH) + ' kg DS/h'); else grid += pcResCell('Dry solids load', F4(x.tdsH), 't DS/h · ' + F4(x.kgDsH) + ' kg DS/h');
+      if (solve !== 'flow') grid += pcResCell('Solution flow', F4(x.qpLh), 'L/h running total' + (pUnit && pUnit.v !== 'Lh' ? ' · ' + F4(x.qpUnitValue) + ' ' + pUnit.label : ''));
+      grid += pcResCell('Product', F4(x.productKgH), 'kg/h · ' + (isFinite(x.productKgDay) ? F4(x.productKgDay) + ' kg/day (' + s.pcHours.trim() + ' h)' : 'kg/day not calculated'));
+      grid += pcResCell('Solution : sludge', F4(x.ratioPct), '% of sludge flow');
+      if (solve !== 'sludge') rows += rowKV('Sludge flow', F4(x.qsLh) + ' L/h', '#EFECE3');
+      rows += rowKV('Sludge flow (m³/h)', F4(x.qsM3h), '#EFECE3');
+      if (solve !== 'flow') rows += rowKV('Pumps', r.pumpsRunning + ' of ' + r.pumpsTotal + ' pumps running', '#EFECE3');
+      rows += rowKV('Strength', F4(x.c) + ' kg/L', '#EFECE3');
+      rows += rowKV('Strength (w/v)', F4(x.cPctWV) + ' % w/v', '#EFECE3');
+      if (solve === 'batch') rows += rowKV('Per batch', F4(x.batchKg) + ' kg / ' + s.pcBatchL.trim() + ' L', '#4FE0B5');
+      rows += rowKV('Batches per day', isFinite(x.batchesDay) ? F4(x.batchesDay) + ' × ' + s.pcBatchL.trim() + ' L' : '—', '#EFECE3');
+      if (isFinite(x.activeDose)) { rows += rowKV('Active dose', F4(x.activeDose) + ' kg active/t DS', '#4FE0B5'); rows += rowKV('Active', F4(x.activeKgH) + ' kg active/h', '#EFECE3'); }
+    }
+    rows += rowKV('Sludge SG', s.pcSg.trim() + ' kg/L' + (!s.pcSgEntered && s.pcSg.trim() === '1.0' ? ' (assumed)' : ''), '#EFECE3');
+    var reading = App.pcOption(App.PC_READING, s.pcReading), form = App.pcOption(App.PC_FORMS, s.pcForm);
+    var results = '<div data-pc-results style="margin-top:18px;background:#16211F;border-radius:18px;padding:18px 17px;color:#EFECE3;">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;"><div data-pc-results-label style="font-size:12px;letter-spacing:0.12em;text-transform:uppercase;color:#A6BEB3;font-weight:700;">Results</div><div style="width:8px;height:8px;border-radius:50%;background:' + (r.ok ? (r.warnings.length ? '#E86A4A' : '#4FE0B5') : '#4A5A54') + ';"></div></div>' +
+      pcResCell(r.headline.label, r.headline.text, r.headline.unit, { label: ' data-pc-headline-label', value: ' data-pc-headline-value', sub: ' data-pc-headline-unit' }) +
+      (grid ? '<div style="margin-top:16px;display:grid;grid-template-columns:1fr 1fr;gap:16px 12px;">' + grid + '</div>' : '') +
+      '<div style="margin-top:15px;padding-top:14px;border-top:1px solid #2C3B37;display:flex;flex-direction:column;gap:7px;">' + rows + '</div>' +
+      '<div style="margin-top:10px;font-size:12px;color:#9FB0AA;">' + (solve !== 'flow' ? 'Reading type: ' + esc(reading ? reading.label : 'Not recognised') + ' · ' : '') + 'Product form: ' + esc(form ? form.label : 'Not recognised') + ' · DS sample location: ' + esc(s.pcDsLocation.trim() || 'not recorded') + '</div></div>';
+    // ---- abstentions / flags (Dose warning stack; fa-note classes have identical computed styles) ----
+    var errHtml = '<div data-pc-errors' + (r.errors.length ? ' style="margin-top:12px;display:flex;flex-direction:column;gap:8px;"' : '') + '>' + r.errors.map(function (e) { return '<div role="alert" class="fa-note fa-note-error">' + esc(e.text) + '</div>'; }).join('') + '</div>';
+    var flagHtml = (r.warnings.length || r.cautions.length) ? '<div data-pc-flags style="margin-top:12px;display:flex;flex-direction:column;gap:8px;">' + r.warnings.map(function (w) { return '<div role="status" class="fa-note">' + esc(w.text) + '</div>'; }).join('') + r.cautions.map(function (t) { return '<div role="status" class="fa-note">' + esc(t) + '</div>'; }).join('') + '</div>' : '';
+    var notesHtml = r.notes.map(function (t) { return '<div style="' + PC_HELP + '">' + esc(t) + '</div>'; }).join('');
+    // ---- Show working (Clients disclosure + Jars step-list panel) ----
+    var working = '<button type="button" data-act="togglePcWorking" aria-expanded="' + (s.pcShowWorking ? 'true' : 'false') + '" aria-controls="fa-pc-working" style="' + PC_DISCLOSURE + 'margin-top:14px;">Show working</button>' +
+      (s.pcShowWorking ? '<div id="fa-pc-working" data-pc-working style="margin-top:12px;background:#16211F;border-radius:12px;padding:13px 14px;color:#EFECE3;">' +
+        '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4FE0B5" stroke-width="2" aria-hidden="true"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M8 6h8M8 10h8M8 14h3M15 14v4"/></svg><div data-pc-working-title style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:#A6BEB3;font-weight:700;">Working — each step with the actual numbers</div></div>' +
+        (r.ok ? '<ol style="margin:0;padding-left:17px;display:flex;flex-direction:column;gap:6px;">' + r.working.map(function (t) { return '<li style="font-size:12px;color:#DCE6E1;overflow-wrap:anywhere;word-wrap:break-word;">' + esc(t) + '</li>'; }).join('') + '</ol>'
+          : '<div style="font-size:12px;color:#DCE6E1;">The working appears when every required input is valid.</div>') + '</div>' : '');
+    // ---- Share / copy (Clients backup pair) ----
+    var share = '<div style="display:flex;gap:9px;margin-top:14px;"><button type="button" data-act="sharePcResults" style="' + PC_BACKUP_BTN + 'background:#087568;color:#FFF;">Share results</button><button type="button" data-act="copyPcResults" style="' + PC_BACKUP_BTN + '">Copy results</button></div>' +
+      (s.pcShareMsg ? '<div role="status" class="fa-note-text" style="margin-top:10px;">' + esc(s.pcShareMsg) + '</div>' : '') +
+      (s.pcShareText ? '<textarea readonly data-key="pcShareText" aria-label="Results text (select all and copy)" style="margin-top:9px;width:100%;height:110px;border:1px solid #D8D2C4;border-radius:10px;padding:9px;' + PC_MONO + 'font-size:12px;background:#FBF9F4;color:#16211F;">' + esc(s.pcShareText) + '</textarea>' +
+        '<div style="margin-top:9px;display:flex;gap:9px;"><button type="button" data-act="dismissPcShareText" style="' + PC_JAR_BTN + 'color:#56635B;">Hide text</button></div>' : '');
+    return '<div style="margin-top:12px;font-size:14px;color:#56635B;">kg of product (as made down) per tonne of dry solids. Choose what to solve for; every other field is required. Nothing here is saved.</div>' +
+      '<div style="margin-top:14px;">' + pcLabelSelect('Solve for', 'pcSolve', App.PC_SOLVE, solve, 'Solve for') + '</div>' +
+      topBlock + makeCard + pumpsCard + pumpList + advanced + results + errHtml + flagHtml + notesHtml + working + share +
+      '<div style="margin-top:14px;background:#FBF9F4;border:1px dashed #D8D2C4;border-radius:12px;padding:13px 14px;font-size:12px;color:#56635B;"><b style="color:#16211F;">How this works.</b> Dose (kg product/t DS) = 1000 × running solution flow (L/h) × strength (kg/L) ÷ (sludge flow (L/h) × SG (kg/L) × DS % ÷ 100). Flows are converted to L/h first; results are rounded for display only.</div>' +
+      '<div style="margin-top:10px;background:#FBF6EC;border:1px solid #EBD9BC;border-radius:12px;padding:13px 14px;font-size:12px;color:#6B5A38;"><b style="color:#8A5E17;">Basis &amp; assumptions.</b> Dose is on an <b>as-made-down product</b> basis, not active polymer, unless you enter active content. No unit, density, active fraction or dosing window is assumed. The 1–8 kg product/t DS (product basis) and 1–5 % checks are indicative belt-press guidance supplied by the user, not a specification or approval. Confirm pump delivery by drawdown or catch test.</div>';
+  }
+
+  // ============================ CALCULATOR mode 2: water treatment dose (mg/L) ==================
+  // Same existing components as the sludge mode; none of the sludge-only fields, outputs or checks are rendered.
+  function waterBody(v) {
+    var s = App.state, r = v.wt, solve = s.wtSolve, x = r.v, F4 = function (n) { return App.pcFmt(n, 4); };
+    var wUnit = App.pcOption(App.WT_WATER_UNITS, s.wtWaterUnit), pUnit = App.pumpUnitOf(s.wtPumpUnit), basis = App.pcOption(App.WT_BASIS, s.wtBasis);
+    var have = r.ok || r.volOk;
+    var flowField = solve !== 'water'
+      ? '<div><div style="' + PC_CAP_TOP + '">Water flow</div><div style="display:flex;border:1px solid #D8D2C4;border-radius:12px;background:#FFF;overflow:hidden;"><input inputmode="decimal" autocomplete="off" data-set="wtWaterFlow" data-key="wtWaterFlow" aria-label="Water flow" value="' + esc(s.wtWaterFlow) + '" style="flex:1;min-width:0;border:none;background:transparent;padding:13px;font-size:16px;' + PC_MONO + 'font-weight:600;">' + pcUnitSelect('wtWaterUnit', App.WT_WATER_UNITS, s.wtWaterUnit, 'Water flow unit') + '</div>' +
+        (have && wUnit && wUnit.v !== 'Lh' ? '<div style="font-size:12px;color:#526159;margin-top:5px;' + PC_MONO + '">= ' + esc(F4(x.qwLh)) + ' L/h used in calc</div>' : '') + '</div>'
+      : '<div>' + pcLabelSelect('Water flow unit', 'wtWaterUnit', App.WT_WATER_UNITS, s.wtWaterUnit, 'Water flow unit', null, null, 'Confirm unit') + '<div style="' + PC_HELP + '">Water flow is being solved; the result is shown in this unit.</div></div>';
+    var topBlock = '<div style="margin-top:12px;display:flex;flex-direction:column;gap:10px;">' + flowField +
+      (solve !== 'dose' ? '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;"><div><div style="' + PC_CAP_TOP + '">Target dose</div>' + pcTopInput('wtDose', s.wtDose, 'Target dose (mg/L)', 'mg/L') + '</div></div>' : '') +
+      '<div style="' + PC_HELP + 'margin-top:0;">Plant or water flow from telemetry. 1 ML/d = 1,000,000 L ÷ 24 h; 1 m³/d = 1000 L ÷ 24 h.</div></div>';
+    // ---- Chemical card (Dose Feed preparation card) ----
+    var chem = '<div style="margin-top:14px;' + PC_CARD + '"><div style="' + PC_CARD_HEAD + '">Chemical</div>' +
+      pcLabelSelect('Chemical basis', 'wtBasis', App.WT_BASIS, s.wtBasis, 'Chemical basis', null, null, 'Choose basis');
+    if (basis && basis.v === 'neat') {
+      var choices = App.waterDensityChoices(), lib = r.library;
+      chem += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:start;margin-top:10px;"><div><div style="' + PC_CAP_TOP + '">Product density</div>' + pcCardInput('wtDensity', s.wtDensity, 'Product density (kg/L)', 'kg/L', 'onWtDensity') + '</div></div>' +
+        '<div style="margin-top:10px;">' + pcLabelSelect('Density from product library (optional)', 'wtDensitySource', [{ v: '', label: 'None — use the entered density' }].concat(choices.map(function (p) { return { v: p.id, label: p.name + ' — typical ' + p.density + ' kg/L (' + p.densityText + ')' }; })), s.wtDensitySource, 'Density from product library (optional)', 'onWtDensitySource') + '</div>' +
+        '<div style="' + PC_HELP + '">' + (lib ? 'Library typical value for ' + esc(lib.name) + ' (range ' + esc(lib.densityText) + '). Enter the SG from the CoA or delivery docket if known.' : 'Density (SG) of the neat product in kg/L — from the CoA, delivery docket or a measurement. No density is assumed; without it only the volumetric dose (L/ML) is shown.') + '</div>';
+    } else if (basis && basis.v === 'madedown') {
+      chem += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;margin-top:10px;">' +
+          '<div><div style="' + PC_CAP_CARD + '">Neat product per batch</div>' + pcCardInput('wtBatchKg', s.wtBatchKg, 'Neat product per batch (kg)', 'kg') + '</div>' +
+          '<div><div style="' + PC_CAP_CARD + '">Batch water volume</div>' + pcCardInput('wtBatchL', s.wtBatchL, 'Batch water volume (L)', 'L') + '</div></div>' +
+        (r.ok ? '<div data-pc-help style="' + PC_HELP + '">= ' + esc(F4(x.conc)) + ' kg/L · ' + esc(F4(x.conc * 100)) + ' % w/v</div>' : '');
+    }
+    chem += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:start;margin-top:10px;">' +
+        '<div><div style="' + PC_CAP_TOP + '">Strength</div>' + pcCardInput('wtStrength', s.wtStrength, 'Strength (% w/w active) (optional)', '%') + '</div>' +
+        '<div><div style="' + PC_CAP_TOP + '">Basis label</div><div style="position:relative;"><input autocomplete="off" data-set="wtStrengthBasis" data-key="wtStrengthBasis" aria-label="Strength basis label (optional)" value="' + esc(s.wtStrengthBasis) + '" placeholder="e.g. as Al2O3" style="width:100%;background:#FBF9F4;border:1px solid #D8D2C4;border-radius:10px;padding:11px;font-size:16px;font-weight:600;"></div></div></div>' +
+      '<div style="margin-top:8px;font-size:12px;color:#526159;">Strength is optional (% w/w active, e.g. 8 % as Al2O3, as Fe or active polymer). No strength is assumed; the dose is mg of product per L of water' + (basis && basis.v === 'madedown' ? ' (kg per L of batch water is treated as kg per L of solution, negligible at field strengths)' : '') + '.</div></div>';
+    // ---- Pumps card + pump rows (shared component, water state) ----
+    var pumpUnitRow = '<div style="margin-top:10px;">' + pcLabelSelect('Pump flow unit', 'wtPumpUnit', App.PUMP_FLOW_UNITS, s.wtPumpUnit, 'Pump flow unit', null, null, 'Confirm unit') + '</div>';
+    var pumpsCard = '<div style="margin-top:12px;' + PC_CARD + '"><div style="' + PC_CARD_HEAD + '">Dosing pumps</div>' +
+      (solve === 'flow'
+        ? '<div style="' + PC_HELP + 'margin-top:0;">The total running chemical flow is being solved — no per-pump split; pump readings are not used. The result is shown in the pump flow unit.</div>' + pumpUnitRow
+        : pcLabelSelect('Reading type', 'wtReading', App.PC_READING, s.wtReading, 'Pump reading type') + pumpUnitRow +
+          (s.wtReading !== 'measured' ? '<div style="' + PC_HELP + '">Not a measured reading: verify actual delivery by drawdown or catch test.</div>' : '') +
+          '<div style="' + PC_HELP + '">Only Running pumps are summed; Standby/off rows stay listed but are excluded. Rows: ' + s.wtPumps.length + ' of ' + App.PC_MAX_PUMPS + '.' + (have && pUnit ? ' Running total ' + esc(App.pcFmt(r.pumpsRunningEntered, 6)) + ' ' + esc(pUnit.label) + ' = ' + esc(F4(x.qcLh)) + ' L/h.' : '') + '</div>') + '</div>';
+    var pumpList = solve === 'flow' ? '' :
+      '<div style="margin-top:15px;display:flex;align-items:center;justify-content:space-between;"><div style="font-size:14px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:#56635B;">Pumps</div><div style="font-size:12px;color:#526159;">' + (isFinite(r.pumpsRunning) ? r.pumpsRunning : 0) + ' of ' + s.wtPumps.length + ' running</div></div>' +
+      '<div style="margin-top:9px;display:flex;flex-direction:column;gap:10px;">' + pumpCards(s.wtPumps, s.wtPumpUnit, 'wt', 'Wt') + '</div>' +
+      '<div style="margin-top:11px;display:flex;gap:9px;"><button type="button" data-act="addWtPump" style="' + PC_JAR_BTN + 'color:#16211F;"><span aria-hidden="true">+ </span>Add pump</button></div>' +
+      (s.wtPumpMsg ? '<div data-wt-pump-msg role="status" class="fa-note" style="margin-top:8px;">' + esc(s.wtPumpMsg) + '</div>' : '');
+    var advanced = '<button type="button" data-act="toggleWtAdvanced" aria-expanded="' + (s.wtShowAdvanced ? 'true' : 'false') + '" aria-controls="fa-wt-advanced" style="' + PC_DISCLOSURE + 'margin-top:14px;">Advanced: run hours</button>' +
+      (s.wtShowAdvanced ? '<div id="fa-wt-advanced" style="margin-top:12px;' + PC_CARD + '"><div style="' + PC_CARD_HEAD + '">Advanced</div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;"><div><div style="' + PC_CAP_CARD + '">Run hours per day</div>' + pcCardInput('wtHours', s.wtHours, 'Run hours per day', 'h/day') + '</div></div>' +
+        '<div style="margin-top:8px;font-size:12px;color:#526159;">Used only for the daily totals (kg/day, L/day).</div></div>' : '');
+    // ---- Results panel (Dose) ----
+    var grid = '', rows = '', activeLabel = String(s.wtStrengthBasis || '').trim() || 'active (basis not stated)';
+    if (r.ok) {
+      if (solve !== 'dose') grid += pcResCell('Dose', F4(x.doseMgL), 'mg/L (target)');
+      if (isFinite(x.volLperML)) grid += pcResCell('Volumetric dose', F4(x.volLperML), 'L/ML (= mL/m³)');
+      if (isFinite(x.activeMgL)) grid += pcResCell('Active dose', F4(x.activeMgL), 'mg/L ' + activeLabel);
+      grid += pcResCell('Product', F4(x.productKgH), 'kg/h · ' + (isFinite(x.productKgDay) ? F4(x.productKgDay) + ' kg/day (' + s.wtHours.trim() + ' h)' : 'kg/day not calculated'));
+      if (solve !== 'flow') grid += pcResCell('Chemical flow', F4(x.qcLh), 'L/h running total' + (pUnit && pUnit.v !== 'Lh' ? ' · ' + F4(x.qcUnitValue) + ' ' + pUnit.label : ''));
+      if (solve !== 'water') grid += pcResCell('Water flow', F4(x.qwM3h), 'm³/h · ' + F4(x.qwMLd) + ' ML/d');
+      rows += rowKV('Water flow', F4(x.qwLh) + ' L/h', '#EFECE3');
+      if (solve !== 'flow') rows += rowKV('Pumps', r.pumpsRunning + ' of ' + r.pumpsTotal + ' pumps running', '#EFECE3');
+      rows += rowKV(basis.v === 'neat' ? 'Product density' : 'Solution strength', basis.v === 'neat' ? s.wtDensity.trim() + ' kg/L (' + (r.library ? 'library typical' : 'entered') + ')' : F4(x.conc) + ' kg/L', '#EFECE3');
+      rows += rowKV('Chemical per day', isFinite(x.chemLDay) ? F4(x.chemLDay) + ' L/day' : '—', '#EFECE3');
+    } else if (r.volOk) {
+      rows += rowKV('Water flow', F4(x.qwLh) + ' L/h', '#EFECE3');
+      rows += rowKV('Pumps', r.pumpsRunning + ' of ' + r.pumpsTotal + ' pumps running', '#EFECE3');
+      rows += rowKV('Chemical flow', F4(x.qcLh) + ' L/h', '#EFECE3');
+    }
+    var reading = App.pcOption(App.PC_READING, s.wtReading);
+    var results = '<div data-wt-results style="margin-top:18px;background:#16211F;border-radius:18px;padding:18px 17px;color:#EFECE3;">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;"><div data-wt-results-label style="font-size:12px;letter-spacing:0.12em;text-transform:uppercase;color:#A6BEB3;font-weight:700;">Results</div><div style="width:8px;height:8px;border-radius:50%;background:' + (r.ok ? '#4FE0B5' : '#4A5A54') + ';"></div></div>' +
+      pcResCell(r.headline.label, r.headline.text, r.headline.unit, { label: ' data-wt-headline-label', value: ' data-wt-headline-value', sub: ' data-wt-headline-unit' }) +
+      (grid ? '<div style="margin-top:16px;display:grid;grid-template-columns:1fr 1fr;gap:16px 12px;">' + grid + '</div>' : '') +
+      (rows ? '<div style="margin-top:15px;padding-top:14px;border-top:1px solid #2C3B37;display:flex;flex-direction:column;gap:7px;">' + rows + '</div>' : '') +
+      '<div style="margin-top:10px;font-size:12px;color:#9FB0AA;">' + (solve !== 'flow' ? 'Reading type: ' + esc(reading ? reading.label : 'Not recognised') + ' · ' : '') + 'Basis: ' + esc(basis ? basis.label : 'not selected') + '</div></div>';
+    var errHtml = '<div data-wt-errors' + (r.errors.length ? ' style="margin-top:12px;display:flex;flex-direction:column;gap:8px;"' : '') + '>' + r.errors.map(function (e) { return '<div role="alert" class="fa-note fa-note-error">' + esc(e.text) + '</div>'; }).join('') + '</div>';
+    var flagHtml = r.cautions.length ? '<div data-wt-flags style="margin-top:12px;display:flex;flex-direction:column;gap:8px;">' + r.cautions.map(function (t) { return '<div role="status" class="fa-note">' + esc(t) + '</div>'; }).join('') + '</div>' : '';
+    var notesHtml = r.notes.map(function (t) { return '<div style="' + PC_HELP + '">' + esc(t) + '</div>'; }).join('');
+    var working = '<button type="button" data-act="toggleWtWorking" aria-expanded="' + (s.wtShowWorking ? 'true' : 'false') + '" aria-controls="fa-wt-working" style="' + PC_DISCLOSURE + 'margin-top:14px;">Show working</button>' +
+      (s.wtShowWorking ? '<div id="fa-wt-working" data-wt-working style="margin-top:12px;background:#16211F;border-radius:12px;padding:13px 14px;color:#EFECE3;">' +
+        '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4FE0B5" stroke-width="2" aria-hidden="true"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M8 6h8M8 10h8M8 14h3M15 14v4"/></svg><div data-wt-working-title style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:#A6BEB3;font-weight:700;">Working — each step with the actual numbers</div></div>' +
+        (r.working.length ? '<ol style="margin:0;padding-left:17px;display:flex;flex-direction:column;gap:6px;">' + r.working.map(function (t) { return '<li style="font-size:12px;color:#DCE6E1;overflow-wrap:anywhere;word-wrap:break-word;">' + esc(t) + '</li>'; }).join('') + '</ol>'
+          : '<div style="font-size:12px;color:#DCE6E1;">The working appears when every required input is valid.</div>') + '</div>' : '');
+    var share = '<div style="display:flex;gap:9px;margin-top:14px;"><button type="button" data-act="shareWtResults" style="' + PC_BACKUP_BTN + 'background:#087568;color:#FFF;">Share results</button><button type="button" data-act="copyWtResults" style="' + PC_BACKUP_BTN + '">Copy results</button></div>' +
+      (s.wtShareMsg ? '<div role="status" class="fa-note-text" style="margin-top:10px;">' + esc(s.wtShareMsg) + '</div>' : '') +
+      (s.wtShareText ? '<textarea readonly data-key="wtShareText" aria-label="Results text (select all and copy)" style="margin-top:9px;width:100%;height:110px;border:1px solid #D8D2C4;border-radius:10px;padding:9px;' + PC_MONO + 'font-size:12px;background:#FBF9F4;color:#16211F;">' + esc(s.wtShareText) + '</textarea>' +
+        '<div style="margin-top:9px;display:flex;gap:9px;"><button type="button" data-act="dismissWtShareText" style="' + PC_JAR_BTN + 'color:#56635B;">Hide text</button></div>' : '');
+    return '<div style="margin-top:12px;font-size:14px;color:#56635B;">Back-calculate the coagulant or polymer dose in mg/L (ppm) from plant flow and dosing-pump flow, or solve the chemical flow or water flow. Every other field is required. Nothing here is saved.</div>' +
+      '<div style="margin-top:14px;">' + pcLabelSelect('Solve for', 'wtSolve', App.WT_SOLVE, solve, 'Solve for') + '</div>' +
+      topBlock + chem + pumpsCard + pumpList + advanced + results + errHtml + flagHtml + notesHtml + working + share +
+      '<div style="margin-top:14px;background:#FBF9F4;border:1px dashed #D8D2C4;border-radius:12px;padding:13px 14px;font-size:12px;color:#56635B;"><b style="color:#16211F;">How this works.</b> mg/h = chemical flow (L/h) × density or make-down strength (kg/L) × 1,000,000; dose (mg/L) = mg/h ÷ water flow (L/h). Neat liquid also gives the volumetric dose L/ML (= mL/m³) = chemical L/h × 1,000,000 ÷ water L/h. Flows are converted to L/h first; results are rounded for display only.</div>' +
+      '<div style="margin-top:10px;background:#FBF6EC;border:1px solid #EBD9BC;border-radius:12px;padding:13px 14px;font-size:12px;color:#6B5A38;"><b style="color:#8A5E17;">Basis &amp; assumptions.</b> The dose is mg of product per L of water unless you enter a strength, which adds the active dose under your basis label. No unit, density, strength or typical dose range is assumed or applied; a result is not an approval of the dose. Confirm pump delivery by drawdown or catch test.</div>';
+  }
+
   function navBtn(act, style, svg, label) {
     return '<button data-act="' + act + '" style="' + style + '">' + svg + '<span style="font-size:12px;font-weight:600;">' + label + '</span></button>';
   }
@@ -1154,6 +1429,7 @@
     return navBtn('goHome', v.navHomeStyle, '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M3 9.5 12 3l9 6.5V20a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/></svg>', 'Home') +
       navBtn('goProducts', v.navProductsStyle, '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M6 2v6l-4 8a3 3 0 0 0 3 4h10a3 3 0 0 0 3-4l-4-8V2"/><path d="M6 2h8"/></svg>', 'Products') +
       navBtn('goCalc', v.navCalcStyle, '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M8 6h8M8 10h8M8 14h3M15 14v4"/></svg>', 'Dose') +
+      navBtn('goCalculator', v.navCalculatorStyle, '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true"><rect x="4" y="2" width="16" height="20" rx="2"/><rect x="7.5" y="5" width="9" height="4" rx="1"/><circle cx="8.5" cy="13.5" r="1" fill="currentColor"/><circle cx="12" cy="13.5" r="1" fill="currentColor"/><circle cx="15.5" cy="13.5" r="1" fill="currentColor"/><circle cx="8.5" cy="17.5" r="1" fill="currentColor"/><circle cx="12" cy="17.5" r="1" fill="currentColor"/><circle cx="15.5" cy="17.5" r="1" fill="currentColor"/></svg>', 'Calculator') +
       navBtn('goJars', v.navJarsStyle, '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M9 2h6M8 2v6.5L4.5 16A3 3 0 0 0 7.2 20h9.6a3 3 0 0 0 2.7-3.5L16 8.5V2"/></svg>', 'Jars') +
       navBtn('goPumps', v.navPumpsStyle, '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg>', 'Pumps') +
       navBtn('goGuide', v.navGuideStyle, '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>', 'Guide');
@@ -1311,7 +1587,7 @@
     var screen = this.$screen;
     Array.prototype.forEach.call(screen.querySelectorAll('select'), function (el, i) {
       el.classList.add('fa-native-select');
-      var key = el.getAttribute('data-key') || '', embedded = ['flowUnit', 'sludgeFlowUnit', 'guideProgDoseUnit', 'guideProgFlowUnit', 'pumpMaxUnit'].indexOf(key) >= 0;
+      var key = el.getAttribute('data-key') || '', embedded = ['flowUnit', 'sludgeFlowUnit', 'guideProgDoseUnit', 'guideProgFlowUnit', 'pumpMaxUnit', 'pcSludgeUnit', 'wtWaterUnit'].indexOf(key) >= 0 && !(el.parentNode && el.parentNode.tagName === 'LABEL');
       var needsContext = Array.prototype.some.call(el.options, function (o) { return o.text.length > 8; });
       if (!needsContext) return;
       if (el.labels && el.labels.length && !el.getAttribute('aria-label') && !el.getAttribute('aria-labelledby')) {
@@ -1351,6 +1627,7 @@
     if (v.isProductDetail) html = this.screens.productDetail(v);
     else if (v.isProducts) html = this.screens.products(v);
     else if (v.isCalc) html = this.screens.calc(v);
+    else if (v.isCalculator) html = this.screens.calculator(v);
     else if (v.isJars) html = this.screens.jars(v);
     else if (v.isPumps) html = this.screens.pumps(v);
     else if (v.isClients) html = this.screens.clients(v);

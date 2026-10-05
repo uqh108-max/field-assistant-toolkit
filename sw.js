@@ -15,7 +15,7 @@
  * while the site is down) must never overwrite a working app file — v15 did
  * exactly that and left installed phones showing a 404 even offline.
  */
-var BUILD = '2f9d8f5c6263';
+var BUILD = '60d7e89b8801';
 var CACHE = 'field-assistant-v16-' + BUILD;
 var PREFIX = 'field-assistant-';
 var CORE = [
@@ -114,6 +114,12 @@ self.addEventListener('activate', function (e) {
       }));
     }).then(function () { return self.clients.claim(); })
   );
+});
+
+// A page asks which release served it (Calculator share text). Reply with this worker's BUILD only.
+self.addEventListener('message', function (e) {
+  var port = e && e.ports && e.ports[0];
+  if (port && e.data && e.data.type === 'fa-build') port.postMessage({ type: 'fa-build', build: BUILD });
 });
 
 self.addEventListener('fetch', function (e) {
