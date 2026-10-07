@@ -94,6 +94,10 @@
       wtPumps: [{ flow: '', status: 'running' }], wtPumpUnit: '', wtReading: 'unknown', wtStrength: '', wtStrengthBasis: '', wtDose: '', wtHours: '24',
       wtStrengthFrom: 'strength', wtSolStrength: '',
       wtShowAdvanced: false, wtShowWorking: false, wtPumpMsg: '', wtShareMsg: '', wtShareText: '',
+      // Jar Test mode: 'potable' (mg/L jars, saved tests) or 'sludge' (bench dewatering dose, kg product / t DS).
+      // The sludge jar inputs are a memory-only draft (never persisted); only the sludge SG has a default (1.0, shown as assumed).
+      jarMode: 'potable',
+      jdSolve: 'dose', jdSampleMl: '', jdDs: '', jdSg: '1.0', jdSgEntered: false, jdSolStrength: '', jdPolyMl: '', jdDose: '', jdShowWorking: false,
       backupMsg: '', backupText: '', lastBackup: '',
       showRestore: false, restoreText: '', restoreMsg: '', restoreOk: false,
       // Plain-notice disclosures ("Why?", "Source details"): view state only, collapsed by default, never saved.
@@ -908,6 +912,83 @@
     // certainly the solution strength typed in the wrong box. The tolerance keeps a batch-derived strength (kg / L x 100) from missing an
     // exact repeat through binary rounding. Neutral hint only; the maths use what was entered.
     pcActiveAtOrBelow: function (active, strengthPct) { return isFinite(active) && isFinite(strengthPct) && strengthPct > 0 && active <= strengthPct * (1 + 1e-9); },
+    // ---- Jar Test, Sludge dewatering: bench dose in kg product per t DS from a jar / beaker test ----
+    JD_SOLVE: [{ v: 'dose', label: 'Dose (kg product / t DS)' }, { v: 'ml', label: 'Polymer solution to add (mL)' }],
+    jarSludgeInputs: function () {
+      var s = this.state;
+      return { solve: s.jdSolve, sampleMl: s.jdSampleMl, ds: s.jdDs, sg: s.jdSg, sgEntered: s.jdSgEntered, solStrength: s.jdSolStrength, polyMl: s.jdPolyMl, dose: s.jdDose };
+    },
+    computeJarSludge: function () { return this.jarSludgeCalc(this.jarSludgeInputs()); },
+    jdInputSig: function () {
+      var s = this.state;
+      return JSON.stringify(['jdSolve', 'jdSampleMl', 'jdDs', 'jdSg', 'jdSgEntered', 'jdSolStrength', 'jdPolyMl', 'jdDose'].map(function (k) { return s[k]; }));
+    },
+    // sludge g = mL x SG (kg/L = g/mL); DS g = sludge g x DS % / 100; product g = mL x S % w/v / 100 (S g per 100 mL);
+    // dose kg/t DS = product g / DS g x 1000. The polymer solution added does not change the dry solids, so it is
+    // never added to the sludge volume. Dose is kg of product as made down, not active polymer.
+    jarSludgeCalc: function (inp) {
+      var self = this, errors = [], cautions = [], notes = [], working = [];
+      var err = function (field, text, prompt) { errors.push(prompt ? { field: field, text: text, prompt: true } : { field: field, text: text }); };
+      var num = function (field, raw, label, opts) { var r = self.pcNumber(raw, label, opts); if (r.error) { err(field, r.error, r.empty); return NaN; } return r.value; };
+      var raw = function (x) { return String(x == null ? '' : x).trim(); };
+      var F = function (n) { return self.pcFmt(n, 6); };
+      var v = { sampleMl: NaN, ds: NaN, sg: NaN, S: NaN, sludgeG: NaN, dsG: NaN, productG: NaN, polyMl: NaN, dose: NaN };
+      var solveOpt = this.pcOption(this.JD_SOLVE, inp.solve), solve = solveOpt ? solveOpt.v : '';
+      if (!solveOpt) err('solve', 'Solve-for choice is not recognised \u2014 choose what to calculate.');
+      v.sampleMl = num('sampleMl', inp.sampleMl, 'Sludge sample volume', { emptyHint: ' \u2014 enter the volume of sludge in the jar or beaker, in mL.' });
+      v.ds = num('ds', inp.ds, 'Dry solids', { emptyHint: ' \u2014 enter the % DS of the sludge sample.' });
+      if (v.ds >= 100) { err('ds', 'Dry solids must be below 100 % (it is the dry fraction of the wet sludge mass).'); v.ds = NaN; }
+      v.sg = num('sg', inp.sg, 'Sludge SG');
+      var sr = this.pcSolutionStrength(inp.solStrength);
+      if (sr.error) err('solStrength', sr.error, sr.empty); else v.S = sr.value;
+      if (solve === 'dose') v.polyMl = num('polyMl', inp.polyMl, 'Polymer solution added', { emptyHint: ' \u2014 enter the mL of made-down polymer solution added to the jar.' });
+      if (solve === 'ml') v.dose = num('dose', inp.dose, 'Target dose', { emptyHint: ' \u2014 enter the target dose in kg product per t DS.' });
+      cautions.push.apply(cautions, this.plausibilityCautions(v.sg, v.S, false));
+      var sgAssumed = !inp.sgEntered && raw(inp.sg) === '1.0';
+      if (sgAssumed) notes.push('Sludge SG 1.0 kg/L (assumed): 1 mL of sludge is taken as 1 g. Enter a measured SG if known.');
+      notes.push('Dose is kg of product as made down per tonne of dry solids, not active polymer.');
+      notes.push('The polymer solution added does not change the dry solids in the jar, so it is not added to the sludge volume.');
+      var hl = { label: { dose: 'Polymer dose', ml: 'Polymer solution to add' }[solve] || 'Result', text: '\u2014', unit: '', precise: '' };
+      var ok = !errors.length;
+      if (ok) {
+        v.sludgeG = v.sampleMl * v.sg;
+        v.dsG = v.sludgeG * v.ds / 100;
+        if (solve === 'dose') { v.productG = v.polyMl * v.S / 100; v.dose = v.productG / v.dsG * 1000; }
+        else { v.productG = v.dose * v.dsG / 1000; v.polyMl = v.productG / v.S * 100; }
+        var hv = solve === 'dose' ? v.dose : v.polyMl;
+        if (!isFinite(hv) || !(hv > 0) || !isFinite(v.dsG) || !(v.dsG > 0)) {
+          err('result', 'The result is outside the representable numeric range \u2014 check the entered values.'); ok = false;
+        }
+      }
+      if (ok) {
+        hl.text = this.pcFmt(hv, 3); var h4 = this.pcFmt(hv, 4); if (h4 !== hl.text) hl.precise = h4;
+        hl.unit = solve === 'dose' ? 'kg product / t DS' : 'mL of ' + raw(inp.solStrength) + ' % w/v solution';
+        working.push('Sludge mass = ' + raw(inp.sampleMl) + ' mL \u00d7 ' + raw(inp.sg) + ' kg/L = ' + F(v.sludgeG) + ' g' + (sgAssumed ? ' (assumed SG)' : ''));
+        working.push('Dry solids = ' + F(v.sludgeG) + ' g \u00d7 ' + raw(inp.ds) + ' % \u00f7 100 = ' + F(v.dsG) + ' g');
+        if (solve === 'dose') {
+          working.push('Product added = ' + raw(inp.polyMl) + ' mL \u00d7 ' + raw(inp.solStrength) + ' % w/v \u00f7 100 = ' + F(v.productG) + ' g (' + raw(inp.solStrength) + ' g per 100 mL)');
+          working.push('Dose = ' + F(v.productG) + ' g \u00f7 ' + F(v.dsG) + ' g \u00d7 1000 = ' + F(v.dose) + ' kg product/t DS');
+        } else {
+          working.push('Product needed = ' + raw(inp.dose) + ' kg/t DS \u00d7 ' + F(v.dsG) + ' g \u00f7 1000 = ' + F(v.productG) + ' g');
+          working.push('Solution to add = ' + F(v.productG) + ' g \u00f7 ' + raw(inp.solStrength) + ' % w/v \u00d7 100 = ' + F(v.polyMl) + ' mL');
+        }
+        if (v.polyMl >= v.sampleMl) cautions.push('The polymer solution volume (' + this.pcFmt(v.polyMl, 4) + ' mL) is not smaller than the sludge sample (' + raw(inp.sampleMl) + ' mL). Check the sample volume, solution strength and ' + (solve === 'dose' ? 'solution added' : 'target dose') + '.');
+      }
+      if (!ok) { v.sludgeG = NaN; v.dsG = NaN; v.productG = NaN; if (solve === 'dose') v.dose = NaN; if (solve === 'ml') v.polyMl = NaN; }
+      return { ok: ok, solve: solve, errors: errors, cautions: cautions, notes: notes, working: working, headline: hl, v: v };
+    },
+    // Plausibility cautions (user decision 2026-10-07): neutral, never blocking. A sludge SG outside 0.9-1.5 kg/L or a
+    // polymer solution strength above 1 % w/v is usually a typo (SG 10.2 for 1.02) or the neat product's % typed as the
+    // made-down strength. Sludge dewatering only (Calculator and Jar Test); potable coagulants are often made down above 1 %.
+    PLAUS_SG_MIN: 0.9, PLAUS_SG_MAX: 1.5, PLAUS_POLY_MAX_PCT: 1,
+    plausibilityCautions: function (sg, strengthPct, fromBatch) {
+      var out = [];
+      if (isFinite(sg) && sg > 0 && (sg < this.PLAUS_SG_MIN || sg > this.PLAUS_SG_MAX)) out.push('Sludge SG of ' + this.pcFmt(sg, 4) + ' kg/L is outside the usual 0.9\u20131.5 kg/L for sludge. Check it is a measured value and not a typo.');
+      if (isFinite(strengthPct) && strengthPct > this.PLAUS_POLY_MAX_PCT) out.push(fromBatch
+        ? 'The batch works out at ' + this.pcFmt(strengthPct, 4) + ' % w/v, above 1 % w/v, which is unusual for made-down polymer. Check the kg of product and the litres of water.'
+        : 'A solution strength of ' + this.pcFmt(strengthPct, 4) + ' % w/v is above 1 % w/v, which is unusual for made-down polymer. Check you entered the made-down solution strength, not the neat product\u2019s strength or active content.');
+      return out;
+    },
     // Solution strength S (% w/v as made down) -> { value } or { error[, empty] } naming the field. Never guessed.
     pcSolutionStrength: function (raw) {
       var r = this.pcNumber(raw, 'Solution strength', { emptyHint: ' \u2014 enter the % w/v as made down (g product per 100 mL solution), e.g. 0.25.' });
@@ -1024,6 +1105,7 @@
         else if (!reading || reading.v !== 'measured') cautions.push('Pump reading type is unknown: verify actual delivery by drawdown or catch test before relying on this result.');
       }
       if (sgAssumed) notes.push('Sludge SG 1.0 kg/L (assumed) — change it under Advanced if a measured value is known.');
+      cautions.push.apply(cautions, this.plausibilityCautions(sg, byBatch ? (isFinite(bk) && isFinite(bl) ? bk / bl * 100 : NaN) : S, byBatch));
       if (!raw(inp.active)) {
         notes.push('Dose is kg of product as made down (as-supplied basis). No active fraction is assumed for any product form; enter active content % (from the supplier TDS/CoA) to also show kg active.');
         if (form && (form.v === 'emulsion' || form.v === 'liquid')) notes.push('Emulsion and liquid products are typically not 100 % active: do not compare this product-basis dose with an active-basis figure.');
@@ -1765,6 +1847,7 @@
       // Calculator inputs are a memory-only draft (no save path): any change from the defaults is retained.
       if (this.polyInputSig() !== this._initialPolySig) return true;
       if (this.wtInputSig() !== this._initialWtSig) return true;
+      if (this.jdInputSig() !== this._initialJdSig) return true;
       for (var k in s.guideReadings) {
         if ((String(s.guideReadings[k] || '').trim() || Object.prototype.hasOwnProperty.call(snap.readings, k)) && snap.readings[k] !== s.guideReadings[k]) return true;
       }
@@ -1848,6 +1931,7 @@
   App._initialCalcSig = App.calcInputSig();
   App._initialPolySig = App.polyInputSig();
   App._initialWtSig = App.wtInputSig();
+  App._initialJdSig = App.jdInputSig();
   App._initialJarsSetupSig = App.jarsSetupSig();
 
   // ============================ HANDLERS =====================================
@@ -1930,6 +2014,11 @@
 
     // Calculator mode selector: each mode keeps its own in-memory draft; switching never mixes outputs.
     onCcSludge: function () { App.setState({ ccMode: 'sludge' }); },
+    // Jar Test mode switch (each mode keeps its own draft) and the sludge jar's own controls
+    onJarModeSludge: function () { App.setState({ jarMode: 'sludge' }); },
+    onJarModePotable: function () { App.setState({ jarMode: 'potable' }); },
+    onJdSg: function (el) { App.setState({ jdSg: el.value, jdSgEntered: true }); },
+    toggleJdWorking: function () { App.setState({ jdShowWorking: !App.state.jdShowWorking }); },
     onCcWater: function () { App.setState({ ccMode: 'water' }); },
     // Water treatment dose: the same pump-list rules as the sludge mode, on its own state.
     addWtPump: function () {
@@ -2119,7 +2208,7 @@
       // Product/sample preparation consent is separate from programme dose basis.
       // Stage the intended product without inventing or confirming stock strength.
       if (!App.editJarSetup({ jarProductId: p ? p.id : '' })) return;
-      App.setState({ screen: 'jars', jarCurrentDose: App.decimalText(d) });
+      App.setState({ screen: 'jars', jarMode: 'potable', jarCurrentDose: App.decimalText(d) });
       App.H.bracketJars();
     },
     newGuideProgramme: function () {
@@ -2382,7 +2471,7 @@
     startSaveClient: function () { App.setState({ screen: 'clients', showClientForm: true }); },
 
     // Viewing history is read-only: exact identity, never a live setup recall.
-    viewClientJarTests: function (el) { var id = el.dataset.id; if (typeof id === 'string' && id.trim() && App.state.clients.filter(function (c) { return c.id === id; }).length === 1) App.setState({ screen: 'jars', jarHistoryClientId: id, jarHistoryId: null }); },
+    viewClientJarTests: function (el) { var id = el.dataset.id; if (typeof id === 'string' && id.trim() && App.state.clients.filter(function (c) { return c.id === id; }).length === 1) App.setState({ screen: 'jars', jarMode: 'potable', jarHistoryClientId: id, jarHistoryId: null }); },
     showAllJarTests: function () { App.setState({ jarHistoryClientId: '', jarHistoryId: null }); },
     viewJarTest: function (el) {
       var id = el.dataset.id;

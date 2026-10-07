@@ -790,10 +790,13 @@
           (t.note ? '<div style="margin-top:8px;font-size:12px;color:#56635B;">' + esc(t.note) + '</div>' : '') + '</div>';
       }).join('') + '</div>') : '';
 
-    return '<div style="padding:22px 18px 30px;">' +
-      '<div style="font-size:12px;letter-spacing:0.14em;text-transform:uppercase;color:#087568;font-weight:700;">Field test</div>' +
-      '<div style="font-size:24px;line-height:1.25;font-weight:700;letter-spacing:-0.02em;margin:2px 0 4px;">Jar Test</div>' +
-      '<div style="font-size:14px;color:#56635B;">Dose a set of jars with increasing amounts of stock solution, record how each performs, then carry the winning dose straight into the calculator.</div>' +
+    var jarHeader = '<div style="font-size:12px;letter-spacing:0.14em;text-transform:uppercase;color:#087568;font-weight:700;">Field test</div>' +
+      // Calculator header pattern: one title in both modes, then the mode switch, so the switch never moves on toggle.
+      '<div style="font-size:24px;line-height:1.25;font-weight:700;letter-spacing:-0.02em;margin:2px 0 12px;">Jar Test</div>' +
+      sludgeWaterSwitch('data-jar-mode', 'Jar test mode', s.jarMode === 'sludge', 'onJarModeSludge', 'onJarModePotable');
+    if (s.jarMode === 'sludge') return '<div style="padding:22px 18px 30px;">' + jarHeader + jarSludgeBody() + '</div>';
+    return '<div style="padding:22px 18px 30px;">' + jarHeader +
+      '<div style="margin-top:12px;font-size:14px;color:#56635B;">Dose a set of jars with increasing amounts of stock solution, record how each performs, then carry the winning dose straight into the calculator.</div>' +
       '<div style="margin-top:15px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
         '<div style="font-size:12px;font-weight:700;color:#4B564F;margin-bottom:8px;">Product for this test</div>' +
         comboHtml({
@@ -1295,12 +1298,14 @@
   }
   function pcPumpCards(s) { return pumpCards(s.pcPumps, s.pcPumpUnit, 'pc', 'Pc'); }
   // Calculator mode switch: the Dose page segmented mode switch, with group/pressed semantics and exact names.
-  function ccModeSwitch(mode) {
+  // Shared by the Calculator and Jar Test: Sludge dewatering | Potable water, same names, styles and semantics.
+  function sludgeWaterSwitch(attr, group, sludgeOn, sludgeAct, waterAct) {
     var sub = '<div style="font-size:12px;font-weight:400;opacity:1;">';
-    return '<div data-cc-mode role="group" aria-label="Calculator mode" style="display:flex;background:#E4DFD3;border-radius:12px;padding:3px;gap:3px;">' +
-      '<button type="button" data-act="onCcSludge" aria-pressed="' + (mode !== 'water') + '" aria-label="Sludge dewatering (kg/t DS)" style="' + css(App.segStyle(mode !== 'water')) + '">Sludge dewatering' + sub + 'kg/t DS</div></button>' +
-      '<button type="button" data-act="onCcWater" aria-pressed="' + (mode === 'water') + '" aria-label="Potable water (mg/L)" style="' + css(App.segStyle(mode === 'water')) + '">Potable water' + sub + 'mg/L</div></button></div>';
+    return '<div ' + attr + ' role="group" aria-label="' + group + '" style="display:flex;background:#E4DFD3;border-radius:12px;padding:3px;gap:3px;">' +
+      '<button type="button" data-act="' + sludgeAct + '" aria-pressed="' + sludgeOn + '" aria-label="Sludge dewatering (kg/t DS)" style="' + css(App.segStyle(sludgeOn)) + '">Sludge dewatering' + sub + 'kg/t DS</div></button>' +
+      '<button type="button" data-act="' + waterAct + '" aria-pressed="' + (!sludgeOn) + '" aria-label="Potable water (mg/L)" style="' + css(App.segStyle(!sludgeOn)) + '">Potable water' + sub + 'mg/L</div></button></div>';
   }
+  function ccModeSwitch(mode) { return sludgeWaterSwitch('data-cc-mode', 'Calculator mode', mode !== 'water', 'onCcSludge', 'onCcWater'); }
   function pcResCell(label, val, sub, attrs) {   // Dose resCell
     attrs = attrs || {};
     return '<div><div' + (attrs.label || '') + ' style="font-size:12px;color:#A6BEB3;font-weight:600;">' + esc(label) + '</div>' +
@@ -1409,6 +1414,57 @@
       topBlock + makeCard + pumpsCard + pumpList + advanced + results + errHtml + flagHtml + notesHtml + working + share +
       '<div style="margin-top:14px;background:#FBF9F4;border:1px dashed #D8D2C4;border-radius:12px;padding:13px 14px;font-size:12px;color:#56635B;"><b style="color:#16211F;">How this works.</b> Dose (kg product/t DS) = 1000 × running solution flow (L/h) × strength (kg/L = % w/v × 0.01) ÷ (sludge flow (L/h) × SG (kg/L) × DS % ÷ 100). Flows are converted to L/h first; results are rounded for display only.</div>' +
       '<div style="margin-top:10px;background:#FBF6EC;border:1px solid #EBD9BC;border-radius:12px;padding:13px 14px;font-size:12px;color:#6B5A38;"><b style="color:#8A5E17;">Basis &amp; assumptions.</b> Dose is on an <b>as-made-down product</b> basis, not active polymer, unless you enter active content. No unit, density, active fraction or dosing window is assumed. The 1–8 kg product/t DS (product basis) and 1–5 % checks are indicative belt-press guidance supplied by the user, not a specification or approval. Confirm pump delivery by drawdown or catch test.</div>';
+  }
+
+  // ============================ JAR TEST mode: sludge dewatering (bench dose, kg product / t DS) ============
+  // Built from the Calculator's components (label select, cream card inputs, dark results panel, message stack,
+  // Show working disclosure); none of the potable jar controls, outputs or save path are rendered in this mode.
+  function jarSludgeBody() {
+    var s = App.state, r = App.computeJarSludge(), x = r.v, solve = r.solve, F4 = function (n) { return App.pcFmt(n, 4); };
+    var sgAssumed = !s.jdSgEntered && String(s.jdSg).trim() === '1.0';
+    var sampleCard = '<div style="margin-top:14px;' + PC_CARD + '"><div style="' + PC_CARD_HEAD + '">Sludge sample</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;">' +
+        '<div><div style="' + PC_CAP_CARD + '">Sample volume</div>' + pcCardInput('jdSampleMl', s.jdSampleMl, 'Sludge sample volume (mL)', 'mL') + '</div>' +
+        '<div><div style="' + PC_CAP_CARD + '">Dry solids (%)</div>' + pcCardInput('jdDs', s.jdDs, 'Dry solids (%)', '% DS') + '</div></div>' +
+      '<div style="' + PC_HELP + '">Dry solids is % w/w of the wet sludge. Use DS measured on the same sludge as the jar sample.</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;margin-top:10px;">' +
+        '<div><div style="' + PC_CAP_CARD + '">Sludge SG</div>' + pcCardInput('jdSg', s.jdSg, 'Sludge SG (kg/L)', 'kg/L', 'onJdSg') + '</div></div>' +
+      '<div data-jd-sg-help style="' + PC_HELP + '">SG is prefilled 1.0 and labelled assumed in the results until you change it.</div></div>';
+    var sOk = !r.errors.some(function (e) { return e.field === 'solStrength'; }) && String(s.jdSolStrength).trim();
+    var polyCell = solve === 'ml'
+      ? '<div><div style="' + PC_CAP_CARD + '">Target dose</div>' + pcCardInput('jdDose', s.jdDose, 'Target dose (kg product per t DS)', 'kg/t DS') + '</div>'
+      : '<div><div style="' + PC_CAP_CARD + '">Solution added</div>' + pcCardInput('jdPolyMl', s.jdPolyMl, 'Polymer solution added (mL)', 'mL') + '</div>';
+    // Pump-card pattern: two columns while each field can show a 6-character value beside its suffix (>=140px),
+    // stacked below that (about 358px viewport), so '0.0625 % w/v' and '12.75 kg/t DS' are never clipped.
+    var polyCard = '<div style="margin-top:12px;' + PC_CARD + '"><div style="' + PC_CARD_HEAD + '">Polymer solution</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:10px;align-items:end;">' +
+        '<div><div style="' + PC_CAP_CARD + '">Solution strength</div>' + pcCardInput('jdSolStrength', s.jdSolStrength, 'Solution strength (% w/v)', '% w/v') + '</div>' + polyCell + '</div>' +
+      '<div data-jd-strength-help style="' + PC_HELP + '">The strength of the made-down polymer solution you are dosing into the jar, in % w/v (g of product per 100 mL of solution). Not the neat product\u2019s strength.</div>' +
+      (sOk ? '<div data-jd-help style="' + PC_HELP + '">= ' + esc(F4(App.parseNum(s.jdSolStrength) * 10)) + ' g of product per L of solution</div>' : '') + '</div>';
+    var grid = '';
+    if (r.ok) {
+      grid += pcResCell('Dry solids in jar', F4(x.dsG), 'g DS');
+      grid += pcResCell(solve === 'ml' ? 'Product needed' : 'Product added', F4(x.productG), 'g · ' + F4(x.productG * 1000) + ' mg');
+    }
+    var rows = r.ok ? rowKV('Sludge mass', F4(x.sludgeG) + ' g', '#EFECE3') + (solve === 'ml' ? rowKV('Target dose', String(s.jdDose).trim() + ' kg/t DS', '#EFECE3') : rowKV('Solution added', String(s.jdPolyMl).trim() + ' mL', '#EFECE3')) : '';
+    rows += rowKV('Sludge SG', String(s.jdSg).trim() + ' kg/L' + (sgAssumed ? ' (assumed)' : ''), '#EFECE3');
+    var results = '<div data-jd-results style="margin-top:18px;background:#16211F;border-radius:18px;padding:18px 17px;color:#EFECE3;">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;"><div style="font-size:12px;letter-spacing:0.12em;text-transform:uppercase;color:#A6BEB3;font-weight:700;">Results</div><div style="width:8px;height:8px;border-radius:50%;background:' + (r.ok ? (r.cautions.length ? '#E86A4A' : '#4FE0B5') : '#4A5A54') + ';"></div></div>' +
+      pcResCell(r.headline.label, r.headline.text, r.headline.unit, { label: ' data-jd-headline-label', value: ' data-jd-headline-value', sub: ' data-jd-headline-unit', extra: r.headline.precise ? '<div data-jd-headline-precise style="font-size:12px;color:#9FB0AA;">More precisely: ' + esc(r.headline.precise) + '</div>' : '' }) +
+      (grid ? '<div style="margin-top:16px;display:grid;grid-template-columns:1fr 1fr;gap:16px 12px;">' + grid + '</div>' : '') +
+      '<div style="margin-top:15px;padding-top:14px;border-top:1px solid #2C3B37;display:flex;flex-direction:column;gap:7px;">' + rows + '</div></div>';
+    var errHtml = '<div data-jd-errors' + (r.errors.length ? ' style="margin-top:12px;display:flex;flex-direction:column;gap:8px;"' : '') + '>' + r.errors.map(pcMsg).join('') + '</div>';
+    var flagHtml = r.cautions.length ? '<div data-jd-flags style="margin-top:12px;display:flex;flex-direction:column;gap:8px;">' + r.cautions.map(function (t) { return '<div role="status" class="fa-note">' + esc(t) + '</div>'; }).join('') + '</div>' : '';
+    var notesHtml = r.notes.map(function (t) { return '<div style="' + PC_HELP + '">' + esc(t) + '</div>'; }).join('');
+    var working = '<button type="button" data-act="toggleJdWorking" aria-expanded="' + (s.jdShowWorking ? 'true' : 'false') + '" aria-controls="fa-jd-working" style="' + PC_DISCLOSURE + 'margin-top:14px;">Show working</button>' +
+      (s.jdShowWorking ? '<div id="fa-jd-working" data-jd-working style="margin-top:12px;background:#16211F;border-radius:12px;padding:13px 14px;color:#EFECE3;">' +
+        '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4FE0B5" stroke-width="2" aria-hidden="true"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M8 6h8M8 10h8M8 14h3M15 14v4"/></svg><div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:#A6BEB3;font-weight:700;">Working — each step with the actual numbers</div></div>' +
+        (r.ok ? '<ol style="margin:0;padding-left:17px;display:flex;flex-direction:column;gap:6px;">' + r.working.map(function (t) { return '<li style="font-size:12px;color:#DCE6E1;overflow-wrap:anywhere;word-wrap:break-word;">' + esc(t) + '</li>'; }).join('') + '</ol>'
+          : '<div style="font-size:12px;color:#DCE6E1;">The working appears when every required input is valid.</div>') + '</div>' : '');
+    return '<div style="margin-top:12px;font-size:14px;color:#56635B;">Bench (jar or beaker) polymer dose for sludge dewatering, in kg of product as made down per tonne of dry solids. Choose what to solve for; every other field is required. Nothing here is saved.</div>' +
+      '<div style="margin-top:14px;">' + pcLabelSelect('Solve for', 'jdSolve', App.JD_SOLVE, s.jdSolve, 'Solve for') + '</div>' +
+      sampleCard + polyCard + results + errHtml + flagHtml + notesHtml + working +
+      '<div style="margin-top:14px;background:#FBF9F4;border:1px dashed #D8D2C4;border-radius:12px;padding:13px 14px;font-size:12px;color:#56635B;"><b style="color:#16211F;">How this works.</b> Dry solids (g) = sample (mL) × SG (kg/L) × DS % ÷ 100. Product (g) = solution (mL) × strength (% w/v) ÷ 100. Dose (kg product/t DS) = product (g) ÷ dry solids (g) × 1000. Results are rounded for display only.</div>';
   }
 
   // ============================ CALCULATOR mode 2: water treatment dose (mg/L) ==================
