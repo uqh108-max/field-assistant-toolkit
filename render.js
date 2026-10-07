@@ -1226,7 +1226,29 @@
   var PC_JAR_BTN = 'flex:1;border:1px solid #D8D2C4;background:#FFF;cursor:pointer;border-radius:11px;padding:11px;font-size:14px;font-weight:700;'; // Jars add/remove
   var PC_BACKUP_BTN = 'flex:1;border:1px solid #087568;cursor:pointer;background:#FFF;color:#087568;border-radius:11px;padding:11px 8px;font-size:14px;font-weight:700;'; // Clients backup pair
   var PC_DISCLOSURE = 'margin-top:9px;width:100%;border:1px dashed #D8D2C4;cursor:pointer;background:#FBF9F4;color:#16211F;border-radius:11px;padding:10px;font-size:14px;font-weight:600;min-height:44px;'; // Clients restore toggle (+44px target)
-  function pcSuffixPad(suffix, base) { return { '%': 34, '% DS': 44, 'kg/L': 44, 'kg': 40, 'L': 34, 'h/day': 52, 'kg/t DS': 64 }[suffix] || base; }
+  function pcSuffixPad(suffix, base) { return { '%': 34, '% DS': 44, '% w/v': 58, 'kg/L': 44, 'kg': 40, 'L': 34, 'h/day': 52, 'kg/t DS': 64 }[suffix] || base; }
+  // Calculator message stack: a field not yet entered or chosen is a neutral prompt (Dose page fa-help note);
+  // an entered value that cannot be used is a red error naming the field.
+  function pcMsg(e) { return e.prompt ? '<div role="note" class="fa-help">' + esc(e.text) + '</div>' : '<div role="alert" class="fa-note fa-note-error">' + esc(e.text) + '</div>'; }
+  // Make-down 'Strength from' method + its own inputs (sludge 'pc' / water 'wt' state; never mixed)
+  function pcStrengthFields(k, s, r, solved) {
+    var from = s[k + 'StrengthFrom'], F4 = function (n) { return App.pcFmt(n, 4); }, x = r.v;
+    var html = pcLabelSelect('Strength from', k + 'StrengthFrom', App.PC_STRENGTH_FROM, from, 'Strength from');
+    if (from === 'strength') {
+      html += solved
+        ? '<div style="' + PC_HELP + '">Batch strength is being solved: the required % w/v as made down is a result.</div>'
+        : '<div style="margin-top:10px;"><div style="' + PC_CAP_CARD + '">Solution strength (% w/v)</div>' + pcCardInput(k + 'SolStrength', s[k + 'SolStrength'], 'Solution strength (% w/v)', '% w/v') + '</div>' +
+          '<div style="' + PC_HELP + '">' + esc(App.PC_STRENGTH_HELP) + '</div>' +
+          (r.ok ? '<div data-pc-help style="' + PC_HELP + '">= ' + esc(F4(k === 'pc' ? x.c : x.conc)) + ' kg/L · ' + esc(F4((k === 'pc' ? x.c : x.conc) * 1000)) + ' kg per 1000 L</div>' : '');
+    } else if (from === 'batch') {
+      html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;margin-top:10px;">' +
+          (solved ? '' : '<div><div style="' + PC_CAP_CARD + '">Neat product per batch</div>' + pcCardInput(k + 'BatchKg', s[k + 'BatchKg'], 'Neat product per batch (kg)', 'kg') + '</div>') +
+          '<div><div style="' + PC_CAP_CARD + '">Batch water volume</div>' + pcCardInput(k + 'BatchL', s[k + 'BatchL'], 'Batch water volume (L)', 'L') + '</div></div>' +
+        (r.ok ? (k === 'pc' ? '<div data-pc-help style="' + PC_HELP + '">= ' + esc(F4(x.c)) + ' kg/L · ' + esc(F4(x.cPctWV)) + ' % w/v · ' + esc(F4(x.kgPer1000)) + ' kg per 1000 L</div>'
+          : '<div data-pc-help style="' + PC_HELP + '">= ' + esc(F4(x.conc)) + ' kg/L · ' + esc(F4(x.conc * 100)) + ' % w/v</div>') : '');
+    }
+    return html;
+  }
   // white top-level field (Dose "Dry solids" / "Polymer dose")
   function pcTopInput(key, val, aria, suffix, text) {
     return '<div style="position:relative;"><input ' + (text ? '' : 'inputmode="decimal" ') + 'autocomplete="off" data-set="' + key + '" data-key="' + key + '" aria-label="' + esc(aria) + '" value="' + esc(val) + '"' + (text ? ' placeholder="' + esc(text) + '"' : '') + ' style="width:100%;background:#FFF;border:1px solid #D8D2C4;border-radius:12px;padding:13px ' + (suffix ? pcSuffixPad(suffix, 44) + 'px' : '13px') + ' 13px 13px;font-size:16px;' + (text ? '' : PC_MONO) + 'font-weight:600;">' +
@@ -1283,7 +1305,7 @@
     attrs = attrs || {};
     return '<div><div' + (attrs.label || '') + ' style="font-size:12px;color:#A6BEB3;font-weight:600;">' + esc(label) + '</div>' +
       '<div' + (attrs.value || '') + ' style="' + PC_MONO + 'font-size:24px;line-height:1.25;font-weight:600;color:#4FE0B5;letter-spacing:-0.01em;overflow-wrap:anywhere;word-wrap:break-word;">' + esc(val) + '</div>' +
-      '<div' + (attrs.sub || '') + ' style="font-size:12px;color:#9FB0AA;">' + esc(sub) + '</div></div>';
+      '<div' + (attrs.sub || '') + ' style="font-size:12px;color:#9FB0AA;">' + esc(sub) + '</div>' + (attrs.extra || '') + '</div>';
   }
   App.screens.calculator = function (v) {
     var water = App.state.ccMode === 'water';
@@ -1309,16 +1331,17 @@
       ((dsCell || doseCell) ? '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;">' + dsCell + doseCell + '</div>' : '') +
       '<div><div style="' + PC_CAP_TOP + '">DS sample location (optional)</div>' + pcTopInput('pcDsLocation', s.pcDsLocation, 'DS sample location (optional)', '', 'e.g. press feed, thickener, digester') + '</div>' +
       '<div style="' + PC_HELP + 'margin-top:0;">Dry solids is % w/w of the wet sludge' + (solve === 'ds' ? ' and is being solved' : '') + '. Use DS from the same point as the sludge flow (normally the press feed).</div></div>';
-    // ---- Make-down card (Dose Feed preparation card) ----
-    var makeCard = '<div style="margin-top:14px;' + PC_CARD + '"><div style="' + PC_CARD_HEAD + '">Make-down (batch)</div>' +
-      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;">' +
-        (solve !== 'batch' ? '<div><div style="' + PC_CAP_CARD + '">Neat product per batch</div>' + pcCardInput('pcBatchKg', s.pcBatchKg, 'Neat product per batch (kg)', 'kg') + '</div>' : '') +
-        '<div><div style="' + PC_CAP_CARD + '">Batch water volume</div>' + pcCardInput('pcBatchL', s.pcBatchL, 'Batch water volume (L)', 'L') + '</div></div>' +
-      (r.ok ? '<div data-pc-help style="' + PC_HELP + '">= ' + esc(F4(x.c)) + ' kg/L · ' + esc(F4(x.cPctWV)) + ' % w/v · ' + esc(F4(x.kgPer1000)) + ' kg per 1000 L</div>' : '') +
-      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:start;margin-top:10px;">' +
-        '<div>' + pcLabelSelect('Product form', 'pcForm', App.PC_FORMS, s.pcForm, 'Product form') + '</div>' +
-        '<div><div style="' + PC_CAP_TOP + '">Active content</div>' + pcCardInput('pcActive', s.pcActive, 'Active content (%) (optional)', '%') + '</div></div>' +
-      '<div style="margin-top:8px;font-size:12px;color:#526159;">' + (solve === 'batch' ? 'Batch strength is being solved: kg of product per batch is a result. ' : '') + 'kg per L of batch water is treated as kg per L of solution (negligible at field strengths). The dose is kg of product as made down; no active fraction is assumed for any form. Active content is optional: enter it from the supplier TDS/CoA to also see kg active.</div></div>';
+    // ---- Make-down card (Dose Feed preparation card): 'Strength from' method, then product form and active content ----
+    var byStrength = s.pcStrengthFrom === 'strength', byBatch = s.pcStrengthFrom === 'batch';
+    var makeCard = '<div style="margin-top:14px;' + PC_CARD + '"><div style="' + PC_CARD_HEAD + '">Make-down</div>' +
+      pcStrengthFields('pc', s, r, solve === 'batch') +
+      '<div style="margin-top:10px;">' + pcLabelSelect('Product form', 'pcForm', App.PC_FORMS, s.pcForm, 'Product form') + '</div>' +
+      '<div style="margin-top:10px;"><div style="' + PC_CAP_CARD + '">Active content of neat product (%, optional, from supplier TDS/CoA)</div>' + pcCardInput('pcActive', s.pcActive, 'Active content of neat product (%, optional, from supplier TDS/CoA)', '%') +
+        '<div style="' + PC_HELP + '">Not your solution strength.</div>' +
+        (r.activeHint ? '<div role="note" class="fa-help" data-pc-active-hint style="margin-top:6px;">' + esc(r.activeHint) + '</div>' : '') + '</div>' +
+      '<div style="margin-top:8px;font-size:12px;color:#526159;">' + (solve === 'batch' && byBatch ? 'Batch strength is being solved: kg of product per batch is a result. ' : '') +
+        (byBatch ? 'kg per L of batch water is treated as kg per L of solution (negligible at field strengths). ' : byStrength ? 'Solution strength is % w/v as made down: 1 % w/v = 10 g per L = 0.01 kg/L. ' : '') +
+        'The dose is kg of product as made down; no active fraction is assumed for any form. Active content is optional: enter the neat product\u2019s active % from the supplier TDS/CoA to also see kg active.</div></div>';
     // ---- Pumps card (Dose Dosing pump card) + pump rows (Jars list) ----
     // required unit: the stacked label-wrapped field (as Reading type), never an inline caption beside a narrow select
     var pumpUnitRow = '<div style="margin-top:10px;">' + pcLabelSelect('Pump flow unit', 'pcPumpUnit', App.PUMP_FLOW_UNITS, s.pcPumpUnit, 'Pump flow unit', null, null, 'Confirm unit') + '</div>';
@@ -1353,20 +1376,21 @@
       if (solve !== 'flow') rows += rowKV('Pumps', r.pumpsRunning + ' of ' + r.pumpsTotal + ' pumps running', '#EFECE3');
       rows += rowKV('Strength', F4(x.c) + ' kg/L', '#EFECE3');
       rows += rowKV('Strength (w/v)', F4(x.cPctWV) + ' % w/v', '#EFECE3');
-      if (solve === 'batch') rows += rowKV('Per batch', F4(x.batchKg) + ' kg / ' + s.pcBatchL.trim() + ' L', '#4FE0B5');
-      rows += rowKV('Batches per day', isFinite(x.batchesDay) ? F4(x.batchesDay) + ' × ' + s.pcBatchL.trim() + ' L' : '—', '#EFECE3');
+      if (solve === 'batch' && byBatch) rows += rowKV('Per batch', F4(x.batchKg) + ' kg / ' + s.pcBatchL.trim() + ' L', '#4FE0B5');
+      if (byBatch) rows += rowKV('Batches per day', isFinite(x.batchesDay) ? F4(x.batchesDay) + ' × ' + s.pcBatchL.trim() + ' L' : '—', '#EFECE3'); // no batch volume in strength mode
       if (isFinite(x.activeDose)) { rows += rowKV('Active dose', F4(x.activeDose) + ' kg active/t DS', '#4FE0B5'); rows += rowKV('Active', F4(x.activeKgH) + ' kg active/h', '#EFECE3'); }
     }
     rows += rowKV('Sludge SG', s.pcSg.trim() + ' kg/L' + (!s.pcSgEntered && s.pcSg.trim() === '1.0' ? ' (assumed)' : ''), '#EFECE3');
     var reading = App.pcOption(App.PC_READING, s.pcReading), form = App.pcOption(App.PC_FORMS, s.pcForm);
     var results = '<div data-pc-results style="margin-top:18px;background:#16211F;border-radius:18px;padding:18px 17px;color:#EFECE3;">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;"><div data-pc-results-label style="font-size:12px;letter-spacing:0.12em;text-transform:uppercase;color:#A6BEB3;font-weight:700;">Results</div><div style="width:8px;height:8px;border-radius:50%;background:' + (r.ok ? (r.warnings.length ? '#E86A4A' : '#4FE0B5') : '#4A5A54') + ';"></div></div>' +
-      pcResCell(r.headline.label, r.headline.text, r.headline.unit, { label: ' data-pc-headline-label', value: ' data-pc-headline-value', sub: ' data-pc-headline-unit' }) +
+      pcResCell(r.headline.label, r.headline.text, r.headline.unit, { label: ' data-pc-headline-label', value: ' data-pc-headline-value', sub: ' data-pc-headline-unit', extra: r.headline.precise ? '<div data-pc-headline-precise style="font-size:12px;color:#9FB0AA;">More precisely: ' + esc(r.headline.precise) + '</div>' : '' }) +
       (grid ? '<div style="margin-top:16px;display:grid;grid-template-columns:1fr 1fr;gap:16px 12px;">' + grid + '</div>' : '') +
       '<div style="margin-top:15px;padding-top:14px;border-top:1px solid #2C3B37;display:flex;flex-direction:column;gap:7px;">' + rows + '</div>' +
-      '<div style="margin-top:10px;font-size:12px;color:#9FB0AA;">' + (solve !== 'flow' ? 'Reading type: ' + esc(reading ? reading.label : 'Not recognised') + ' · ' : '') + 'Product form: ' + esc(form ? form.label : 'Not recognised') + ' · DS sample location: ' + esc(s.pcDsLocation.trim() || 'not recorded') + '</div></div>';
+      '<div style="margin-top:10px;font-size:12px;color:#9FB0AA;">' + (solve !== 'flow' ? 'Reading type: ' + esc(reading ? reading.label : 'Not recognised') + ' · ' : '') + 'Product form: ' + esc(form ? form.label : 'Not recognised') + ' · DS sample location: ' + esc(s.pcDsLocation.trim() || 'not recorded') + '</div>' +
+      (r.ok && r.strengthUsed ? '<div data-pc-strength-used style="margin-top:6px;font-size:12px;color:#9FB0AA;">' + esc(r.strengthUsed) + '</div>' : '') + '</div>';
     // ---- abstentions / flags (Dose warning stack; fa-note classes have identical computed styles) ----
-    var errHtml = '<div data-pc-errors' + (r.errors.length ? ' style="margin-top:12px;display:flex;flex-direction:column;gap:8px;"' : '') + '>' + r.errors.map(function (e) { return '<div role="alert" class="fa-note fa-note-error">' + esc(e.text) + '</div>'; }).join('') + '</div>';
+    var errHtml = '<div data-pc-errors' + (r.errors.length ? ' style="margin-top:12px;display:flex;flex-direction:column;gap:8px;"' : '') + '>' + r.errors.map(pcMsg).join('') + '</div>';
     var flagHtml = (r.warnings.length || r.cautions.length) ? '<div data-pc-flags style="margin-top:12px;display:flex;flex-direction:column;gap:8px;">' + r.warnings.map(function (w) { return '<div role="status" class="fa-note">' + esc(w.text) + '</div>'; }).join('') + r.cautions.map(function (t) { return '<div role="status" class="fa-note">' + esc(t) + '</div>'; }).join('') + '</div>' : '';
     var notesHtml = r.notes.map(function (t) { return '<div style="' + PC_HELP + '">' + esc(t) + '</div>'; }).join('');
     // ---- Show working (Clients disclosure + Jars step-list panel) ----
@@ -1383,7 +1407,7 @@
     return '<div style="margin-top:12px;font-size:14px;color:#56635B;">kg of product (as made down) per tonne of dry solids. Choose what to solve for; every other field is required. Nothing here is saved.</div>' +
       '<div style="margin-top:14px;">' + pcLabelSelect('Solve for', 'pcSolve', App.PC_SOLVE, solve, 'Solve for') + '</div>' +
       topBlock + makeCard + pumpsCard + pumpList + advanced + results + errHtml + flagHtml + notesHtml + working + share +
-      '<div style="margin-top:14px;background:#FBF9F4;border:1px dashed #D8D2C4;border-radius:12px;padding:13px 14px;font-size:12px;color:#56635B;"><b style="color:#16211F;">How this works.</b> Dose (kg product/t DS) = 1000 × running solution flow (L/h) × strength (kg/L) ÷ (sludge flow (L/h) × SG (kg/L) × DS % ÷ 100). Flows are converted to L/h first; results are rounded for display only.</div>' +
+      '<div style="margin-top:14px;background:#FBF9F4;border:1px dashed #D8D2C4;border-radius:12px;padding:13px 14px;font-size:12px;color:#56635B;"><b style="color:#16211F;">How this works.</b> Dose (kg product/t DS) = 1000 × running solution flow (L/h) × strength (kg/L = % w/v × 0.01) ÷ (sludge flow (L/h) × SG (kg/L) × DS % ÷ 100). Flows are converted to L/h first; results are rounded for display only.</div>' +
       '<div style="margin-top:10px;background:#FBF6EC;border:1px solid #EBD9BC;border-radius:12px;padding:13px 14px;font-size:12px;color:#6B5A38;"><b style="color:#8A5E17;">Basis &amp; assumptions.</b> Dose is on an <b>as-made-down product</b> basis, not active polymer, unless you enter active content. No unit, density, active fraction or dosing window is assumed. The 1–8 kg product/t DS (product basis) and 1–5 % checks are indicative belt-press guidance supplied by the user, not a specification or approval. Confirm pump delivery by drawdown or catch test.</div>';
   }
 
@@ -1409,15 +1433,13 @@
         '<div style="margin-top:10px;">' + pcLabelSelect('Density from product library (optional)', 'wtDensitySource', [{ v: '', label: 'None — use the entered density' }].concat(choices.map(function (p) { return { v: p.id, label: p.name + ' — typical ' + p.density + ' kg/L (' + p.densityText + ')' }; })), s.wtDensitySource, 'Density from product library (optional)', 'onWtDensitySource') + '</div>' +
         '<div style="' + PC_HELP + '">' + (lib ? 'Library typical value for ' + esc(lib.name) + ' (range ' + esc(lib.densityText) + '). Enter the SG from the CoA or delivery docket if known.' : 'Density (SG) of the neat product in kg/L — from the CoA, delivery docket or a measurement. No density is assumed; without it only the volumetric dose (L/ML) is shown.') + '</div>';
     } else if (basis && basis.v === 'madedown') {
-      chem += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;margin-top:10px;">' +
-          '<div><div style="' + PC_CAP_CARD + '">Neat product per batch</div>' + pcCardInput('wtBatchKg', s.wtBatchKg, 'Neat product per batch (kg)', 'kg') + '</div>' +
-          '<div><div style="' + PC_CAP_CARD + '">Batch water volume</div>' + pcCardInput('wtBatchL', s.wtBatchL, 'Batch water volume (L)', 'L') + '</div></div>' +
-        (r.ok ? '<div data-pc-help style="' + PC_HELP + '">= ' + esc(F4(x.conc)) + ' kg/L · ' + esc(F4(x.conc * 100)) + ' % w/v</div>' : '');
+      chem += '<div style="margin-top:10px;">' + pcStrengthFields('wt', s, r, false) + '</div>';
     }
     chem += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:start;margin-top:10px;">' +
-        '<div><div style="' + PC_CAP_TOP + '">Strength</div>' + pcCardInput('wtStrength', s.wtStrength, 'Strength (% w/w active) (optional)', '%') + '</div>' +
+        '<div><div style="' + PC_CAP_TOP + '">Active content</div>' + pcCardInput('wtStrength', s.wtStrength, 'Active content of neat product (% w/w, optional, from supplier TDS/CoA)', '%') + '</div>' +
         '<div><div style="' + PC_CAP_TOP + '">Basis label</div><div style="position:relative;"><input autocomplete="off" data-set="wtStrengthBasis" data-key="wtStrengthBasis" aria-label="Strength basis label (optional)" value="' + esc(s.wtStrengthBasis) + '" placeholder="e.g. as Al2O3" style="width:100%;background:#FBF9F4;border:1px solid #D8D2C4;border-radius:10px;padding:11px;font-size:16px;font-weight:600;"></div></div></div>' +
-      '<div style="margin-top:8px;font-size:12px;color:#526159;">Strength is optional (% w/w active, e.g. 8 % as Al2O3, as Fe or active polymer). No strength is assumed; the dose is mg of product per L of water' + (basis && basis.v === 'madedown' ? ' (kg per L of batch water is treated as kg per L of solution, negligible at field strengths)' : '') + '.</div></div>';
+      (r.activeHint ? '<div role="note" class="fa-help" data-wt-active-hint style="margin-top:6px;">' + esc(r.activeHint) + '</div>' : '') +
+      '<div style="margin-top:8px;font-size:12px;color:#526159;">Active content is optional: the neat product\u2019s active % (% w/w, e.g. 8 % as Al2O3, as Fe or active polymer) from the supplier TDS/CoA.' + (basis && basis.v === 'madedown' ? ' It is not your solution strength.' : '') + ' No active content is assumed; the dose is mg of product per L of water' + (basis && basis.v === 'madedown' && s.wtStrengthFrom === 'batch' ? ' (kg per L of batch water is treated as kg per L of solution, negligible at field strengths)' : basis && basis.v === 'madedown' && s.wtStrengthFrom === 'strength' ? ' (solution strength is % w/v as made down: 1 % w/v = 0.01 kg/L)' : '') + '.</div></div>';
     // ---- Pumps card + pump rows (shared component, water state) ----
     var pumpUnitRow = '<div style="margin-top:10px;">' + pcLabelSelect('Pump flow unit', 'wtPumpUnit', App.PUMP_FLOW_UNITS, s.wtPumpUnit, 'Pump flow unit', null, null, 'Confirm unit') + '</div>';
     var pumpsCard = '<div style="margin-top:12px;' + PC_CARD + '"><div style="' + PC_CARD_HEAD + '">Dosing pumps</div>' +
@@ -1456,11 +1478,12 @@
     var reading = App.pcOption(App.PC_READING, s.wtReading);
     var results = '<div data-wt-results style="margin-top:18px;background:#16211F;border-radius:18px;padding:18px 17px;color:#EFECE3;">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;"><div data-wt-results-label style="font-size:12px;letter-spacing:0.12em;text-transform:uppercase;color:#A6BEB3;font-weight:700;">Results</div><div style="width:8px;height:8px;border-radius:50%;background:' + (r.ok ? '#4FE0B5' : '#4A5A54') + ';"></div></div>' +
-      pcResCell(r.headline.label, r.headline.text, r.headline.unit, { label: ' data-wt-headline-label', value: ' data-wt-headline-value', sub: ' data-wt-headline-unit' }) +
+      pcResCell(r.headline.label, r.headline.text, r.headline.unit, { label: ' data-wt-headline-label', value: ' data-wt-headline-value', sub: ' data-wt-headline-unit', extra: r.headline.precise ? '<div data-wt-headline-precise style="font-size:12px;color:#9FB0AA;">More precisely: ' + esc(r.headline.precise) + '</div>' : '' }) +
       (grid ? '<div style="margin-top:16px;display:grid;grid-template-columns:1fr 1fr;gap:16px 12px;">' + grid + '</div>' : '') +
       (rows ? '<div style="margin-top:15px;padding-top:14px;border-top:1px solid #2C3B37;display:flex;flex-direction:column;gap:7px;">' + rows + '</div>' : '') +
-      '<div style="margin-top:10px;font-size:12px;color:#9FB0AA;">' + (solve !== 'flow' ? 'Reading type: ' + esc(reading ? reading.label : 'Not recognised') + ' · ' : '') + 'Basis: ' + esc(basis ? basis.label : 'not selected') + '</div></div>';
-    var errHtml = '<div data-wt-errors' + (r.errors.length ? ' style="margin-top:12px;display:flex;flex-direction:column;gap:8px;"' : '') + '>' + r.errors.map(function (e) { return '<div role="alert" class="fa-note fa-note-error">' + esc(e.text) + '</div>'; }).join('') + '</div>';
+      '<div style="margin-top:10px;font-size:12px;color:#9FB0AA;">' + (solve !== 'flow' ? 'Reading type: ' + esc(reading ? reading.label : 'Not recognised') + ' · ' : '') + 'Basis: ' + esc(basis ? basis.label : 'not selected') + '</div>' +
+      (r.ok && r.strengthUsed ? '<div data-wt-strength-used style="margin-top:6px;font-size:12px;color:#9FB0AA;">' + esc(r.strengthUsed) + '</div>' : '') + '</div>';
+    var errHtml = '<div data-wt-errors' + (r.errors.length ? ' style="margin-top:12px;display:flex;flex-direction:column;gap:8px;"' : '') + '>' + r.errors.map(pcMsg).join('') + '</div>';
     var flagHtml = r.cautions.length ? '<div data-wt-flags style="margin-top:12px;display:flex;flex-direction:column;gap:8px;">' + r.cautions.map(function (t) { return '<div role="status" class="fa-note">' + esc(t) + '</div>'; }).join('') + '</div>' : '';
     var notesHtml = r.notes.map(function (t) { return '<div style="' + PC_HELP + '">' + esc(t) + '</div>'; }).join('');
     var working = '<button type="button" data-act="toggleWtWorking" aria-expanded="' + (s.wtShowWorking ? 'true' : 'false') + '" aria-controls="fa-wt-working" style="' + PC_DISCLOSURE + 'margin-top:14px;">Show working</button>' +
@@ -1476,7 +1499,7 @@
       '<div style="margin-top:14px;">' + pcLabelSelect('Solve for', 'wtSolve', App.WT_SOLVE, solve, 'Solve for') + '</div>' +
       topBlock + chem + pumpsCard + pumpList + advanced + results + errHtml + flagHtml + notesHtml + working + share +
       '<div style="margin-top:14px;background:#FBF9F4;border:1px dashed #D8D2C4;border-radius:12px;padding:13px 14px;font-size:12px;color:#56635B;"><b style="color:#16211F;">How this works.</b> mg/h = chemical flow (L/h) × density or make-down strength (kg/L) × 1,000,000; dose (mg/L) = mg/h ÷ water flow (L/h). Neat liquid also gives the volumetric dose L/ML (= mL/m³) = chemical L/h × 1,000,000 ÷ water L/h. Flows are converted to L/h first; results are rounded for display only.</div>' +
-      '<div style="margin-top:10px;background:#FBF6EC;border:1px solid #EBD9BC;border-radius:12px;padding:13px 14px;font-size:12px;color:#6B5A38;"><b style="color:#8A5E17;">Basis &amp; assumptions.</b> The dose is mg of product per L of water unless you enter a strength, which adds the active dose under your basis label. No unit, density, strength or typical dose range is assumed or applied; a result is not an approval of the dose. Confirm pump delivery by drawdown or catch test.</div>';
+      '<div style="margin-top:10px;background:#FBF6EC;border:1px solid #EBD9BC;border-radius:12px;padding:13px 14px;font-size:12px;color:#6B5A38;"><b style="color:#8A5E17;">Basis &amp; assumptions.</b> The dose is mg of product per L of water unless you enter the neat product\u2019s active content, which adds the active dose under your basis label. No unit, density, strength, active content or typical dose range is assumed or applied; a result is not an approval of the dose. Confirm pump delivery by drawdown or catch test.</div>';
   }
 
   function navBtn(act, style, svg, label) {
