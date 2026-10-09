@@ -178,7 +178,7 @@
     var clients = s.clients.map(function (c) {
       var fu = App.flowLabel(c.flowUnit);
       var su = App.flowLabel(c.sludgeFlowUnit);
-      var nTests = s.jarTests.filter(function (x) { return x.clientId === c.id; }).length;
+      var nTests = s.jarTests.filter(function (x) { return x.clientId === c.id; }).length + s.jarTestsV2.filter(function (x) { return x.clientId === c.id; }).length;
       var hasCalc = !!c.mode;
       // preview strings render only on the clients screen — skip the string
       // assembly on every other screen's re-render
@@ -318,7 +318,7 @@
           setup: rawHistorical(t.jarVol) + ' mL jar · ' + rawHistorical(t.stockPct) + '% stock', note: t.note || ''
         };
       }),
-      hasJarTests: s.jarTests.length > 0,
+      hasJarTests: s.jarTests.length > 0, hasJarTestsV2: s.jarTestsV2.length > 0,
       // seg / nav styles
       modeConcStyle: css(this.segStyle(s.calcMode === 'conc')),
       modeSludgeStyle: css(this.segStyle(s.calcMode === 'sludge')),
@@ -795,7 +795,9 @@
       '<div style="font-size:24px;line-height:1.25;font-weight:700;letter-spacing:-0.02em;margin:2px 0 12px;">Jar Test</div>' +
       sludgeWaterSwitch('data-jar-mode', 'Jar test mode', s.jarMode === 'sludge', 'onJarModeSludge', 'onJarModePotable');
     if (s.jarMode === 'sludge') return '<div style="padding:22px 18px 30px;">' + jarHeader + jarSludgeBody() + '</div>';
-    return '<div style="padding:22px 18px 30px;">' + jarHeader +
+    // Potable water: the multi-product test is the default; the single-product jar of earlier releases stays as it was.
+    if (s.potableView !== 'classic') return '<div style="padding:22px 18px 30px;">' + jarHeader + potableViewSwitch(s.potableView) + pjBody(v, historyHtml, historyDetail) + '</div>';
+    return '<div style="padding:22px 18px 30px;">' + jarHeader + potableViewSwitch(s.potableView) +
       '<div style="margin-top:12px;font-size:14px;color:#56635B;">Dose a set of jars with increasing amounts of stock solution, record how each performs, then carry the winning dose straight into the calculator.</div>' +
       '<div style="margin-top:15px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
         '<div style="font-size:12px;font-weight:700;color:#4B564F;margin-bottom:8px;">Product for this test</div>' +
@@ -1148,7 +1150,8 @@
       var progBtns = scalarHtml + '<div style="margin-top:11px;display:flex;gap:8px;">' +
         '<button data-act="guideProgToCalc" ' + (prog.canSend ? '' : 'disabled ') + 'style="flex:1;border:none;cursor:pointer;background:' + (prog.canSend ? '#087568' : '#C9D2CD') + ';color:#FFF;border-radius:11px;padding:12px 8px;font-size:14px;font-weight:700;">Send to calculator</button>' +
         '<button data-act="guideProgRetest" ' + (prog.canRetest ? '' : 'disabled ') + 'style="flex:1;border:1px solid ' + (prog.canRetest ? '#087568' : '#C9D2CD') + ';cursor:pointer;background:#FFF;color:' + (prog.canRetest ? '#087568' : '#B4BBB4') + ';border-radius:11px;padding:12px 8px;font-size:14px;font-weight:700;">Retest 50–150% in jars</button></div>' +
-        (prog.canRetest ? '' : '<div style="margin-top:6px;font-size:12px;color:#526159;">Retest bracketing works on mg/L doses (jar tests dose on flow).</div>');
+        (prog.canRetest ? '' : '<div style="margin-top:6px;font-size:12px;color:#526159;">Retest bracketing works on mg/L doses (jar tests dose on flow).</div>') +
+        (s.guideRetestNote ? '<div role="note" data-guide-retest-note style="margin-top:6px;">' + esc(s.guideRetestNote) + '</div>' : '');
       progHtml = '<div style="margin-top:12px;background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:14px 15px;">' +
         '<div style="font-size:12px;font-weight:700;color:#4B564F;">Current dosing programme</div>' +
         '<div style="font-size:12px;color:#56635B;margin:4px 0 11px;">What the plant runs today — their product, scalar or ordered endpoints (e.g. 2–4 or 2 to 4), and flow. Saves with the readings; only checks a dose window when its chemical basis, units and context are confirmed. Enter as-supplied product mass only; active-ingredient rates must be converted externally using a verified active fraction, otherwise do not send or retest.</div>' +
@@ -1465,6 +1468,308 @@
       '<div style="margin-top:14px;">' + pcLabelSelect('Solve for', 'jdSolve', App.JD_SOLVE, s.jdSolve, 'Solve for') + '</div>' +
       sampleCard + polyCard + results + errHtml + flagHtml + notesHtml + working +
       '<div style="margin-top:14px;background:#FBF9F4;border:1px dashed #D8D2C4;border-radius:12px;padding:13px 14px;font-size:12px;color:#56635B;"><b style="color:#16211F;">How this works.</b> Dry solids (g) = sample (mL) × SG (kg/L) × DS % ÷ 100. Product (g) = solution (mL) × strength (% w/v) ÷ 100. Dose (kg product/t DS) = product (g) ÷ dry solids (g) × 1000. Results are rounded for display only.</div>';
+  }
+
+  // ============================ JAR TEST: Potable water v2 (multi-product) =======================
+  // Built only from existing components: cards (PC_CARD), caption (PC_CAP_CARD), cream in-card inputs with the
+  // unit suffix, the pump-card grid repeat(auto-fit, minmax(140px, 1fr)) for paired fields, the Sludge/Potable
+  // segmented switch look (App.segStyle), label-wrapped native selects, fa-help / fa-note / fa-note-error messages,
+  // the disclosure button look (PC_DISCLOSURE) and the Clients backup-pair buttons. Every control has an exact name.
+  var PJ_GRID = 'display:grid;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:10px;align-items:start;';
+  // inside batches and jars (three cards deep) units go in the caption, so a narrow cell never clips a 6-character value
+  var PJ_GRID_S = 'display:grid;grid-template-columns:repeat(auto-fit, minmax(112px, 1fr));gap:10px;align-items:start;';
+  var PJ_GRID_E = 'display:grid;grid-template-columns:repeat(auto-fit, minmax(112px, 1fr));gap:10px;align-items:end;';
+  var PJ_PRIMARY = 'width:100%;min-height:44px;border:none;cursor:pointer;background:#087568;color:#FFF;border-radius:12px;padding:13px;font-size:14px;font-weight:700;';
+  var PJ_OUTLINE = 'border:1px solid #087568;cursor:pointer;background:#FFF;color:#087568;border-radius:11px;padding:11px 8px;min-height:44px;font-size:14px;font-weight:700;';
+  var PJ_SUBCARD = 'background:#FBF9F4;border:1px solid #E2DDD0;border-radius:12px;padding:12px 13px;';
+  // multi-line text (Comments, jar notes): the Comments box look, 16 px
+  var PJ_TEXTAREA = 'width:100%;background:#FBF9F4;border:1px solid #D8D2C4;border-radius:10px;padding:11px;font-size:16px;font-weight:600;';
+  function pjPad(suffix) { return suffix ? Math.max(34, 17 + String(suffix).length * 8) : 11; }
+  // text / decimal / date / time input bound to a draft path (App.pjSet); aria is the exact accessible name
+  function pjIn(path, val, aria, suffix, o) {
+    o = o || {}; var kind = o.kind || 'dec', mono = kind === 'dec' ? PC_MONO : '', sfx = suffix && kind === 'dec' ? suffix : '';
+    var typeAttr = kind === 'date' ? 'type="date" ' : (kind === 'time' ? 'type="time" ' : (kind === 'dec' ? 'inputmode="decimal" ' : ''));
+    return '<div style="position:relative;"><input ' + typeAttr + 'autocomplete="off" data-actinput="onPj" data-p="' + esc(path) + '" data-key="pj:' + esc(path) + '" aria-label="' + esc(aria) + '" value="' + esc(val) + '"' + (o.ph ? ' placeholder="' + esc(o.ph) + '"' : '') +
+      ' style="width:100%;min-height:44px;background:#FBF9F4;border:1px solid #D8D2C4;border-radius:10px;padding:11px ' + (sfx ? pjPad(sfx) : (kind === 'dec' ? 6 : 11)) + 'px 11px ' + (o.compact ? 6 : 11) + 'px;font-size:16px;' + mono + 'font-weight:600;">' +
+      (sfx ? '<span style="' + PC_SUFFIX + 'right:11px;pointer-events:none;">' + esc(sfx) + '</span>' : '') + '</div>';
+  }
+  // caption + input; o.unitCap adds a muted unit to the caption when the unit is too long for an in-field suffix
+  function pjField(caption, path, val, aria, suffix, o) {
+    return '<div><div style="' + PC_CAP_CARD + '">' + esc(caption) + (o && o.unitCap ? ' <span style="font-weight:400;color:#526159;">(' + esc(o.unitCap) + ')</span>' : '') + '</div>' + pjIn(path, val, aria, suffix, o) + '</div>';
+  }
+  function pjOptions(list, cur, placeholder) {
+    return (placeholder ? '<option value=""' + (cur ? '' : ' selected') + '>' + esc(placeholder) + '</option>' : '') + list.map(function (x) { return '<option value="' + esc(x.v) + '"' + (x.v === cur ? ' selected' : '') + '>' + esc(x.label) + '</option>'; }).join('');
+  }
+  function pjSelect(caption, path, list, cur, aria, placeholder, act, extra) {
+    var idm = /data-id="([^"]*)"/.exec(extra || ''), key = path || ((act || 'onPjSel') + (idm ? ':' + idm[1] : ''));
+    return '<label>' + esc(caption) + ' <select data-actchange="' + (act || 'onPjSel') + '"' + (path ? ' data-p="' + esc(path) + '"' : '') + (extra || '') + ' data-key="pj:' + esc(key) + '" aria-label="' + esc(aria) + '" style="width:100%;">' + pjOptions(list, cur, placeholder) + '</select></label>';
+  }
+  function pjMsgs(list) {
+    return list.length ? '<div role="alert" class="fa-note fa-note-error" style="margin-top:10px;"><b>Fix before exporting:</b><ul style="margin:6px 0 0;padding-left:18px;">' + list.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul></div>' : '';
+  }
+  function pjHelp(t) { return '<div style="' + PC_HELP + '">' + t + '</div>'; }
+  function pjSection(key, title, sub, body) {
+    var open = !!App.state.pjUi.open[key], id = 'fa-pj-' + key;
+    return '<section data-pj-section="' + key + '" style="margin-top:12px;' + PC_CARD + '">' +
+      '<button type="button" data-act="togglePjSection" data-k="' + key + '" aria-expanded="' + open + '" aria-controls="' + id + '" style="display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;min-height:44px;border:none;background:none;cursor:pointer;text-align:left;padding:0;color:#16211F;">' +
+        '<span style="min-width:0;"><span style="display:block;font-size:16px;font-weight:700;">' + esc(title) + '</span><span style="display:block;font-size:12px;color:#56635B;overflow-wrap:anywhere;">' + esc(sub) + '</span></span>' +
+        '<span aria-hidden="true" style="flex-shrink:0;font-size:16px;font-weight:700;color:#526159;">' + (open ? '\u25B4' : '\u25BE') + '</span></button>' +
+      (open ? '<div id="' + id + '" data-pj-body="' + key + '" style="margin-top:12px;">' + body + '</div>' : '') + '</section>';
+  }
+  function pjSeg(attr, group, items, cur) {
+    return '<div ' + attr + ' role="group" aria-label="' + esc(group) + '" style="display:flex;background:#E4DFD3;border-radius:12px;padding:3px;gap:3px;">' + items.map(function (it) {
+      return '<button type="button" data-act="' + it.act + '"' + (it.attrs || '') + ' aria-pressed="' + (it.v === cur) + '" aria-label="' + esc(it.aria) + '" style="' + css(App.segStyle(it.v === cur)) + 'min-height:44px;">' + it.label + '</button>';
+    }).join('') + '</div>';
+  }
+  function potableViewSwitch(view) {
+    var multi = view !== 'classic';
+    return '<div style="margin-top:10px;">' + pjSeg('data-potable-view', 'Potable water test type', [
+      { act: 'onPotableMulti', v: 'multi', aria: 'Multi-product test', label: 'Multi-product' },
+      { act: 'onPotableClassic', v: 'classic', aria: 'Single product jar (classic)', label: 'Single product' }], multi ? 'multi' : 'classic') + '</div>';
+  }
+  function pjRemoveBtn(act, attrs, aria, label) {
+    return '<button type="button" data-act="' + act + '"' + attrs + ' aria-label="' + esc(aria) + '" style="' + PC_JAR_BTN + 'flex:0 0 auto;color:#56635B;min-height:44px;">' + esc(label) + '</button>';
+  }
+
+  function pjSiteBody(d, issues) {
+    var clients = App.state.clients, ui = App.state.pjUi;
+    var cl = '<label>Client (optional) <select data-actchange="onPjSel" data-p="clientId" data-key="pj:clientId" aria-label="Client" style="width:100%;"><option value=""' + (d.clientId ? '' : ' selected') + '>— no client —</option>' + clients.map(function (c) { return '<option value="' + esc(c.id) + '"' + (c.id === d.clientId ? ' selected' : '') + '>' + esc(c.name + (c.site ? ' — ' + c.site : '')) + '</option>'; }).join('') + '</select></label>';
+    return cl + '<div style="display:flex;flex-direction:column;gap:10px;margin-top:10px;">' +
+      pjField('Site name', 'site.name', d.site.name, 'Site name', '', { kind: 'text' }) +
+      pjField('Water source', 'site.source', d.site.source, 'Water source', '', { kind: 'text' }) +
+      pjField('Investigator', 'site.investigator', d.site.investigator, 'Investigator', '', { kind: 'text' }) + '</div><div style="' + PJ_GRID + 'margin-top:10px;">' +
+      pjField('Date sampled', 'site.date', d.site.date, 'Date sampled', '', { kind: 'date' }) +
+      pjField('Time sampled (24 h)', 'site.time', d.site.time, 'Time sampled (24 hour)', '', { kind: 'time' }) +
+      pjField('UTC offset at sampling', 'site.offset', d.site.offset, 'UTC offset at sampling', '', { kind: 'text', ph: '+10:00' }) + '</div>' +
+      pjHelp('Enter the offset where and when sampled, including daylight saving. Leave the time and offset blank if unknown; saving records the save time separately and never supplies an unknown sampling time.') + pjMsgs(issues.site);
+  }
+  function pjBaselineBody(d, issues) {
+    var head = '<div style="display:grid;grid-template-columns:repeat(3, minmax(0, 1fr));gap:6px;position:sticky;top:0;z-index:1;background:#FFF;padding:2px 0 6px;">' + App.PJ_BASE_COLS.map(function (c) { return '<div style="' + PC_CAP_CARD + 'margin:0;text-align:center;">' + esc(c.label) + '</div>'; }).join('') + '</div>';
+    var rows = App.PJ_BASE_ROWS.map(function (r) {
+      return '<div style="margin-top:8px;"><div style="' + PC_CAP_CARD + '">' + esc(r.label) + (r.unit ? ' <span style="font-weight:400;color:#526159;">(' + esc(r.unit) + ')</span>' : '') + '</div>' +
+        '<div data-pj-base-grid style="display:grid;grid-template-columns:repeat(3, minmax(0, 1fr));gap:6px;">' + App.PJ_BASE_COLS.map(function (c) {
+          var inner = pjIn('base.cols.' + c.k + '.v.' + r.k, d.base.cols[c.k].v[r.k], c.label + ' ' + r.an + (r.unit ? ' (' + r.unit + ')' : ''), '', { kind: 'dec', compact: true });
+          return inner;
+        }).join('') + '</div></div>';
+    }).join('');
+    var times = '<div style="' + PC_CARD_HEAD + 'margin-top:14px;">Reading times (optional)</div><div style="' + PJ_GRID + '">' + App.PJ_BASE_COLS.map(function (c) {
+      return pjField(c.label + ' reading time', 'base.cols.' + c.k + '.time', d.base.cols[c.k].time, c.label + ' reading time (24 hour)', '', { kind: 'time' });
+    }).join('') + '</div>';
+    var flowUnits = App.FLOW_UNITS.map(function (u) { return { v: u.v, label: u.label }; });
+    var plant = '<div style="' + PC_CARD_HEAD + 'margin-top:16px;">Current plant operation</div><div style="' + PJ_GRID + '">' +
+      pjField('Water treated (flow)', 'plant.flow', d.plant.flow, 'Plant flow', '', { kind: 'dec' }) +
+      '<div>' + pjSelect('Flow unit', 'plant.flowUnit', flowUnits, d.plant.flowUnit, 'Plant flow unit', 'Choose unit') + '</div>' +
+      pjField('Hours per day', 'plant.hours', d.plant.hours, 'Plant hours per day', 'h/day', { kind: 'dec' }) + '</div>';
+    var chems = '<div style="' + PC_CARD_HEAD + 'margin-top:16px;">Current chemical application</div><div style="display:flex;flex-direction:column;gap:10px;">' + d.plant.chems.map(function (c, i) {
+      var n = i + 1;
+      return '<div data-pj-chem="' + i + '" style="' + PJ_SUBCARD + '"><div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;"><div style="font-size:14px;font-weight:700;">Chemical ' + n + '</div>' + pjRemoveBtn('removePjChem', ' data-i="' + i + '"', 'Remove current chemical ' + n, '– Remove').replace('flex:0 0 auto;', 'flex:0 0 auto;margin-left:auto;') + '</div>' +
+        '<div style="' + PJ_GRID + '"><div>' + pjSelect('Role', 'plant.chems.' + i + '.role', App.PJ_CHEM_ROLES, c.role, 'Current chemical ' + n + ' role') + '</div>' +
+        pjField('Dose rate', 'plant.chems.' + i + '.dose', c.dose, 'Current chemical ' + n + ' dose (mg/L)', 'mg/L', { kind: 'dec' }) + '</div>' +
+        '<div style="margin-top:10px;">' + pjField('Product', 'plant.chems.' + i + '.product', c.product, 'Current chemical ' + n + ' product', '', { kind: 'text' }) + '</div></div>';
+    }).join('') + '</div><button type="button" data-act="addPjChem" class="fa-btn" style="margin-top:10px;width:100%;">+ Add current chemical</button>';
+    var tele = '<div style="' + PC_CARD_HEAD + 'margin-top:16px;">Extra telemetry readings (optional)</div><div style="display:flex;flex-direction:column;gap:10px;">' + d.telemetry.map(function (t, i) {
+      var n = i + 1;
+      return '<div data-pj-tele="' + i + '" style="' + PJ_SUBCARD + '"><div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;"><div style="font-size:14px;font-weight:700;">Reading ' + n + '</div>' + pjRemoveBtn('removePjTelemetry', ' data-i="' + i + '"', 'Remove telemetry reading ' + n, '– Remove').replace('flex:0 0 auto;', 'flex:0 0 auto;margin-left:auto;') + '</div>' +
+        pjField('Label', 'telemetry.' + i + '.label', t.label, 'Telemetry reading ' + n + ' label', '', { kind: 'text' }) +
+        '<div style="' + PJ_GRID + 'margin-top:10px;">' + pjField('Value', 'telemetry.' + i + '.value', t.value, 'Telemetry reading ' + n + ' value', '', { kind: 'dec' }) +
+        pjField('Unit', 'telemetry.' + i + '.unit', t.unit, 'Telemetry reading ' + n + ' unit', '', { kind: 'text' }) +
+        pjField('Reading time (24 h)', 'telemetry.' + i + '.time', t.time, 'Telemetry reading ' + n + ' time (24 hour)', '', { kind: 'time' }) + '</div></div>';
+    }).join('') + '</div><button type="button" data-act="addPjTelemetry" class="fa-btn" style="margin-top:10px;width:100%;">+ Add telemetry reading</button>';
+    return pjHelp('Plain decimals only. Every cell is optional. pHs, Langelier and Ryznar are values you type from your own calculation; the app does not compute them.') +
+      '<div data-pj-base-box style="margin-top:10px;border:1px solid #E2DDD0;border-radius:12px;padding:8px 6px;">' + head + rows + '</div>' + times + plant + chems + tele + pjMsgs(issues.baseline);
+  }
+  function pjParamsBody(d) {
+    function chip(p) {
+      var on = !!d.params[p.k];
+      return '<button type="button" data-act="togglePjParam" data-k="' + p.k + '" aria-pressed="' + on + '" aria-label="' + esc(p.label + (p.unit ? ' (' + p.unit + ')' : '')) + '" style="min-height:44px;border:1px solid ' + (on ? '#087568' : '#D8D2C4') + ';cursor:pointer;border-radius:11px;padding:10px 12px;font-size:14px;font-weight:700;background:' + (on ? '#087568' : '#FFF') + ';color:' + (on ? '#FFF' : '#16211F') + ';">' + esc(p.label) + '</button>';
+    }
+    return pjHelp('Only the parameters you switch on get an input in every jar. Switched-off parameters are exported as “Not tested”; a parameter that is on but left blank is exported empty. Entries stay in the test if you switch a parameter off and on again.') +
+      '<div style="' + PC_CARD_HEAD + 'margin-top:12px;">Core set</div><div style="display:flex;flex-wrap:wrap;gap:8px;">' + App.PJ_PARAMS.filter(function (p) { return p.core; }).map(chip).join('') + '</div>' +
+      '<div style="' + PC_CARD_HEAD + 'margin-top:12px;">Optional extras</div><div style="display:flex;flex-wrap:wrap;gap:8px;">' + App.PJ_PARAMS.filter(function (p) { return !p.core; }).map(chip).join('') + '</div>';
+  }
+  function pjProductsBody(d, issues) {
+    var ui = App.state.pjUi, lib = App.allProducts().map(function (p) { return { v: p.id, label: p.name }; });
+    var rows = d.products.map(function (p, i) {
+      var n = i + 1, open = ui.productOpen[p.id] !== false, id = 'fa-pj-product-' + p.id, libProd = p.productId ? (App.allProducts().find(function (x) { return x.id === p.productId; }) || null) : null;
+      var sub = (p.role === 'polymer' ? 'Polymer' : 'Coagulant') + ' · ' + ({ incumbent: 'Incumbent', ours: 'Our product', other: 'Other' }[p.party]) + (p.name ? ' · ' + p.name : '') + (String(p.stockPct).trim() ? ' · stock ' + p.stockPct + ' % w/v' : ' · stock strength not entered');
+      return '<div data-pj-product="' + esc(p.id) + '" style="' + PJ_SUBCARD + 'margin-top:10px;">' +
+        '<button type="button" data-act="togglePjProduct" data-id="' + esc(p.id) + '" aria-expanded="' + open + '" aria-controls="' + id + '" aria-label="Product ' + n + ': ' + esc(p.label) + '" style="display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;min-height:44px;border:none;background:none;cursor:pointer;text-align:left;padding:0;color:#16211F;">' +
+          '<span style="min-width:0;"><span style="display:block;font-size:14px;font-weight:700;overflow-wrap:anywhere;">' + esc(p.label) + '</span><span style="display:block;font-size:12px;color:#56635B;overflow-wrap:anywhere;">' + esc(sub) + '</span></span><span aria-hidden="true" style="flex-shrink:0;font-size:14px;font-weight:700;color:#526159;">' + (open ? '\u25B4' : '\u25BE') + '</span></button>' +
+        (open ? '<div id="' + id + '" style="margin-top:10px;"><div style="' + PJ_GRID + '">' +
+          '<div style="grid-column:1 / -1;">' + pjField('Label in this test', 'products.' + i + '.label', p.label, 'Product ' + n + ' label', '', { kind: 'text' }) + '</div>' +
+          '<div>' + pjSelect('Supplied by', 'products.' + i + '.party', App.PJ_PARTY, p.party, 'Product ' + n + ' supplied by') + '</div></div>' +
+          '<div style="margin-top:10px;">' + pjSelect('Library product (optional)', '', lib, p.productId, 'Product ' + n + ' library product', '— type a name instead —', 'onPjLibrary', ' data-id="' + esc(p.id) + '"') + '</div>' +
+          (libProd ? sourceInfo(libProd, { key: 'pj-source:' + p.id }) : '') +
+          '<div style="margin-top:10px;">' + pjField('Product name (as it appears in the report)', 'products.' + i + '.name', p.name, 'Product ' + n + ' name', '', { kind: 'text' }) + '</div>' +
+          '<div style="' + PJ_GRID + 'margin-top:10px;">' + pjField('Stock strength (% w/v as made up)', 'products.' + i + '.stockPct', p.stockPct, 'Product ' + n + ' stock strength (% w/v as made up)', '% w/v', { kind: 'dec' }) +
+          pjField('Price (optional)', 'products.' + i + '.price', p.price, 'Product ' + n + ' price ($/kg)', '$/kg', { kind: 'dec' }) + '</div>' +
+          pjHelp('Stock strength is the made-up dilution you dose from, in % w/v (g of product per 100 mL of stock): not the neat product’s strength or its active content. Nothing is assumed.') +
+          '<div style="margin-top:10px;">' + pjField('Description (optional)', 'products.' + i + '.desc', p.desc, 'Product ' + n + ' description', '', { kind: 'text', ph: 'e.g. 8 % as Al2O3' }) + '</div>' +
+          '<div style="display:flex;margin-top:10px;">' + pjRemoveBtn('removePjProduct', ' data-id="' + esc(p.id) + '"', 'Remove product ' + n + ' ' + p.label, '– Remove product') + '</div></div>' : '') + '</div>';
+    }).join('');
+    var aid = '<div style="' + PJ_SUBCARD + 'margin-top:12px;"><div style="' + PC_CARD_HEAD + '">Given to all jars (optional)</div><div style="' + PJ_GRID + '">' +
+      '<div style="grid-column:1 / -1;">' + pjField('Product', 'aid.name', d.aid.name, 'Given to all jars: product', '', { kind: 'text', ph: 'e.g. LT 20' }) + '</div>' +
+      pjField('Dose', 'aid.dose', d.aid.dose, 'Given to all jars: dose (mg/L)', 'mg/L', { kind: 'dec' }) + '</div>' +
+      pjHelp('An aid added to every jar (for example “All samples were given an additional 0.03 mg/L of LT 20”). It is shown on every jar and exported with each one.') + '</div>';
+    return pjHelp('Add every product you are testing: the incumbent, ours and any polymer. Each jar then picks its products from this list.') + rows +
+      '<div style="margin-top:10px;display:flex;gap:9px;"><button type="button" data-act="addPjProduct" data-role="coagulant" style="' + PC_JAR_BTN + 'min-height:44px;color:#087568;">+ Add coagulant</button><button type="button" data-act="addPjProduct" data-role="polymer" style="' + PC_JAR_BTN + 'min-height:44px;color:#087568;">+ Add polymer</button></div>' +
+      aid + pjMsgs(issues.products);
+  }
+  function pjDoseLine(d, b, j, which, r) {
+    if (r.state === 'ok') return '<div data-pj-dose-line style="' + PC_HELP + '">= ' + (d.doseMode === 'ml' ? esc(App.fmt(r.mgL, 3)) + ' mg/L nominal per initial raw sample' : esc(App.fmt(r.ml, 3)) + ' mL of stock to add') + '</div>';
+    if (r.state === 'prompt') return '<div role="note" class="fa-help" data-pj-dose-line style="margin-top:6px;">' + esc(r.msg) + '</div>';
+    if (r.state === 'error') return '<div role="alert" class="fa-note fa-note-error" data-pj-dose-line style="margin-top:6px;">' + esc(r.msg) + '</div>';
+    return '';
+  }
+  function pjJarHtml(d, b, bi, j, ji) {
+    var ui = App.state.pjUi, bn = bi + 1, jn = ji + 1, name = 'Batch ' + bn + ' jar ' + jn, key = App.pjJarKey(b.id, ji), open = !!(ui.jarOpen && ui.jarOpen[key]), id = 'fa-pj-jar-' + b.id + '-' + ji;
+    var coags = d.products.filter(function (p) { return p.role === 'coagulant'; }).map(function (p) { return { v: p.id, label: p.label + (String(p.name).trim() ? ' — ' + String(p.name).trim() : '') }; });
+    var polys = d.products.filter(function (p) { return p.role === 'polymer'; }).map(function (p) { return { v: p.id, label: p.label + (String(p.name).trim() ? ' — ' + String(p.name).trim() : '') }; });
+    var rc = App.pjJarDose(d, b, j, 'coag'), rp = App.pjJarDose(d, b, j, 'poly'), ml = d.doseMode === 'ml', dosePath = 'batches.' + bi + '.jars.' + ji;
+    var cRow = App.pjFindProduct(d, j.coag), pRow = App.pjFindProduct(d, j.poly);
+    var bits = [];
+    if (cRow && String(j.coagDose).trim()) bits.push(cRow.label + ' ' + String(j.coagDose).trim() + (ml ? ' mL' : ' mg/L')); else if (cRow) bits.push(cRow.label);
+    if (pRow && String(j.polyDose).trim()) bits.push(pRow.label + ' ' + String(j.polyDose).trim() + (ml ? ' mL' : ' mg/L')); else if (pRow) bits.push(pRow.label);
+    var resBits = []; App.PJ_PARAMS.forEach(function (p) { if (d.params[p.k] && String(j.r[p.k]).trim() && resBits.length < 2 && (p.k === 'settledNtu' || p.k === 'filteredNtu' || p.k === 'colour' || p.k === 'ph')) resBits.push(p.label.replace('Settled turbidity', 'settled').replace('Filtered turbidity', 'filtered').replace('Filtered (true) colour', 'colour').replace('Supernatant pH', 'pH') + ' ' + String(j.r[p.k]).trim()); });
+    var sub = (bits.join(' + ') || (App.pjJarUsed(d, b, j) ? 'entries only' : 'not used')) + (resBits.length ? ' · ' + resBits.join(' · ') : '');
+    var seq = 0; for (var q = 0; q < bi; q++) seq += d.batches[q].jars.length;
+    var head = '<button type="button" data-act="togglePjJar" data-id="' + esc(b.id) + '" data-i="' + ji + '" aria-expanded="' + open + '" aria-controls="' + id + '" aria-label="' + name + ' (test no. ' + (seq + jn) + '): ' + esc(sub) + '" style="display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;min-height:44px;border:none;background:none;cursor:pointer;text-align:left;padding:0;color:#16211F;">' +
+      '<span style="min-width:0;"><span style="display:block;font-size:14px;font-weight:700;">Jar ' + jn + '</span><span style="display:block;font-size:12px;color:#56635B;overflow-wrap:anywhere;">' + esc(sub) + '</span></span><span aria-hidden="true" style="flex-shrink:0;font-size:14px;font-weight:700;color:#526159;">' + (open ? '\u25B4' : '\u25BE') + '</span></button>';
+    if (!open) return '<div data-pj-jar="' + esc(b.id) + ':' + ji + '" style="background:#FFF;border:1px solid #E2DDD0;border-radius:12px;padding:6px 12px;">' + head + '</div>';
+    var results = App.PJ_PARAMS.filter(function (p) { return d.params[p.k]; }).map(function (p) {
+      var grade = p.kind === 'grade';
+      return pjField(p.label, dosePath + '.r.' + p.k, j.r[p.k], name + ' ' + p.an + (p.unit && p.unit !== 'pH' ? ' (' + p.unit + ')' : ''), '', { kind: grade ? 'text' : 'dec', ph: grade ? 'e.g. C+' : '', unitCap: p.unit && p.unit !== 'pH' ? p.unit : '' });
+    }).join('');
+    var calc = (cRow && rc.state === 'ok' && rc.mgL > 0) ? '<button type="button" data-act="sendPjToCalc" data-id="' + esc(b.id) + '" data-i="' + ji + '" class="fa-btn" style="margin-top:10px;width:100%;" aria-label="Send ' + name.toLowerCase() + ' dose to the Calculator">Send this jar’s dose to the Calculator →</button>' : '';
+    var note = ui.notes && ui.notes['jar:' + b.id + ':' + ji] ? '<div role="note" class="fa-help" style="margin-top:6px;">' + esc(ui.notes['jar:' + b.id + ':' + ji]) + '</div>' : '';
+    return '<div data-pj-jar="' + esc(b.id) + ':' + ji + '" style="background:#FFF;border:1px solid #D8D2C4;border-radius:12px;padding:6px 12px 12px;">' + head + '<div id="' + id + '" style="margin-top:8px;">' +
+      // product + dose use the 140px pump-card grid: a converted dose can carry up to 10 significant digits
+      '<div style="' + PJ_GRID + '"><div>' + pjSelect('Coagulant', dosePath + '.coag', coags, j.coag, name + ' coagulant', '— none —') + '</div>' +
+        pjField(ml ? 'Added (mL)' : 'Dose (mg/L)', dosePath + '.coagDose', j.coagDose, name + ' coagulant dose (' + (ml ? 'mL of stock' : 'mg/L') + ')', '', { kind: 'dec' }) + '</div>' + pjDoseLine(d, b, j, 'coag', rc) +
+      '<div style="' + PJ_GRID + 'margin-top:10px;"><div>' + pjSelect('Polymer', dosePath + '.poly', polys, j.poly, name + ' polymer', '— none —') + '</div>' +
+        pjField(ml ? 'Added (mL)' : 'Dose (mg/L)', dosePath + '.polyDose', j.polyDose, name + ' polymer dose (' + (ml ? 'mL of stock' : 'mg/L') + ')', '', { kind: 'dec' }) + '</div>' + pjDoseLine(d, b, j, 'poly', rp) +
+      (d.aid.name.trim() ? '<div data-pj-aid style="' + PC_HELP + '">+ ' + esc(d.aid.name.trim()) + (String(d.aid.dose).trim() ? ' ' + esc(String(d.aid.dose).trim()) + ' mg/L' : '') + ' (given to all jars)</div>' : '') +
+      (results ? '<div style="' + PC_CARD_HEAD + 'margin-top:14px;margin-bottom:8px;">Results</div><div style="' + PJ_GRID_E + '">' + results + '</div>' : '<div style="' + PC_HELP + 'margin-top:12px;">No result parameters are switched on (see Parameters tested).</div>') +
+      '<div style="margin-top:10px;"><label>Notes <textarea data-actinput="onPj" data-p="' + esc(dosePath + '.notes') + '" data-key="pj:' + esc(dosePath + '.notes') + '" aria-label="' + esc(name + ' notes') + '" rows="2" style="' + PJ_TEXTAREA + '">' + esc(j.notes) + '</textarea></label></div>' + calc + note + '</div></div>';
+  }
+  function pjBatchHtml(d, b, bi, issues) {
+    var ui = App.state.pjUi, n = bi + 1, last = d.batches[d.batches.length - 1] === b, open = ui.batchOpen[b.id] === undefined ? last : !!ui.batchOpen[b.id], id = 'fa-pj-batch-' + b.id, bp = 'batches.' + bi;
+    var used = b.jars.filter(function (j) { return App.pjJarUsed(d, b, j); }).length;
+    var sub = b.jars.length + ' jars · ' + used + ' used' + (String(b.volMl).trim() ? ' · ' + String(b.volMl).trim() + ' mL' : ' · jar volume not entered');
+    var head = '<button type="button" data-act="togglePjBatch" data-id="' + esc(b.id) + '" aria-expanded="' + open + '" aria-controls="' + id + '" aria-label="Batch ' + n + ': ' + esc(sub) + '" style="display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;min-height:44px;border:none;background:none;cursor:pointer;text-align:left;padding:0;color:#16211F;">' +
+      '<span style="min-width:0;"><span style="display:block;font-size:14px;font-weight:700;">Batch ' + n + '</span><span style="display:block;font-size:12px;color:#56635B;overflow-wrap:anywhere;">' + esc(sub) + '</span></span><span aria-hidden="true" style="flex-shrink:0;font-size:14px;font-weight:700;color:#526159;">' + (open ? '\u25B4' : '\u25BE') + '</span></button>';
+    if (!open) return '<div data-pj-batch="' + esc(b.id) + '" style="' + PJ_SUBCARD + 'margin-top:10px;">' + head + '</div>';
+    var coags = d.products.filter(function (p) { return p.role === 'coagulant'; }).map(function (p) { return { v: p.id, label: p.label + (String(p.name).trim() ? ' — ' + String(p.name).trim() : '') }; });
+    var note = ui.notes && ui.notes['brk:' + b.id] ? '<div role="note" class="fa-help" data-pj-bracket-note style="margin-top:6px;">' + esc(ui.notes['brk:' + b.id]) + '</div>' : '';
+    var settings = '<div style="' + PJ_GRID_E + 'margin-top:10px;">' +
+      pjField('Flash mix (s)', bp + '.flashS', b.flashS, 'Batch ' + n + ' flash mix time (s)', '', { kind: 'dec' }) + pjField('Flash mix (rpm)', bp + '.flashRpm', b.flashRpm, 'Batch ' + n + ' flash mix speed (rpm)', '', { kind: 'dec' }) +
+      pjField('Slow mix (min)', bp + '.slowMin', b.slowMin, 'Batch ' + n + ' slow mix time (min)', '', { kind: 'dec' }) + pjField('Slow mix (rpm)', bp + '.slowRpm', b.slowRpm, 'Batch ' + n + ' slow mix speed (rpm)', '', { kind: 'dec' }) +
+      pjField('Settling (min)', bp + '.settleMin', b.settleMin, 'Batch ' + n + ' settling time (min)', '', { kind: 'dec' }) + pjField('Jar volume (mL)', bp + '.volMl', b.volMl, 'Batch ' + n + ' jar sample volume (mL)', '', { kind: 'dec' }) + '</div>' +
+      '<div style="margin-top:10px;">' + pjField('Filter used (optional)', bp + '.filter', b.filter, 'Batch ' + n + ' filter used', '', { kind: 'text', ph: 'e.g. 0.45 µm membrane' }) + '</div>' +
+      pjHelp('The jar sample volume is the INITIAL raw sample before any stock is added: doses are nominal mg/L per that volume and the stock volume is not added to it.');
+    var bracket = '<div style="' + PJ_SUBCARD + 'margin-top:12px;background:#FFF;"><div style="' + PC_CARD_HEAD + '">Bracket the current plant dose (optional)</div><div style="' + PJ_GRID_S + '"><div>' + pjSelect('Coagulant', bp + '.brkProduct', coags, b.brkProduct, 'Batch ' + n + ' bracket coagulant', '— choose —') + '</div>' +
+      pjField('Plant dose (mg/L)', bp + '.brkDose', b.brkDose, 'Batch ' + n + ' current plant dose (mg/L)', '', { kind: 'dec' }) + '</div>' +
+      '<button type="button" data-act="bracketPj" data-id="' + esc(b.id) + '" class="fa-btn" style="margin-top:10px;width:100%;color:#087568;border-color:#087568;" aria-label="Bracket batch ' + n + ' at 50 to 150 percent">Bracket 50–150 %</button>' +
+      pjHelp('Sets the ' + b.jars.length + ' jars to evenly spaced doses from 50 % to 150 % of what the plant doses today. You are asked to confirm the actual stock preparation first.') + note + '</div>';
+    var jars = '<div style="' + PC_CARD_HEAD + 'margin-top:14px;margin-bottom:8px;">Jars</div><div style="display:flex;flex-direction:column;gap:8px;">' + b.jars.map(function (j, ji) { return pjJarHtml(d, b, bi, j, ji); }).join('') + '</div>' +
+      '<div style="display:flex;gap:9px;margin-top:10px;"><button type="button" data-act="openPjJars" data-id="' + esc(b.id) + '" data-open="1" style="' + PC_JAR_BTN + 'min-height:44px;">Open all jars</button><button type="button" data-act="openPjJars" data-id="' + esc(b.id) + '" data-open="0" style="' + PC_JAR_BTN + 'min-height:44px;">Close all jars</button></div>';
+    var actions = '<div style="display:flex;gap:9px;margin-top:12px;"><button type="button" data-act="duplicatePjBatch" data-id="' + esc(b.id) + '" aria-label="Duplicate batch ' + n + '" style="' + PC_JAR_BTN + 'min-height:44px;color:#16211F;">Duplicate batch</button>' + pjRemoveBtn('removePjBatch', ' data-id="' + esc(b.id) + '"', 'Remove batch ' + n, '– Remove batch').replace('flex:0 0 auto;', 'flex:1;') + '</div>';
+    return '<div data-pj-batch="' + esc(b.id) + '" style="' + PJ_SUBCARD + 'margin-top:10px;">' + head + '<div id="' + id + '" style="margin-top:10px;">' +
+      '<div style="max-width:100%;">' + pjSelect('Gang size', '', [{ v: '4', label: '4 jars' }, { v: '6', label: '6 jars' }], String(b.jars.length === 6 ? 6 : (b.jars.length === 4 ? 4 : b.gang)), 'Batch ' + n + ' gang size', '', 'setPjGang', ' data-id="' + esc(b.id) + '"') + '</div>' + settings + bracket + jars + actions + '</div></div>';
+  }
+  function pjBatchesBody(d, issues) {
+    var ui = App.state.pjUi, ml = d.doseMode === 'ml';
+    var mode = '<div style="' + PC_CARD_HEAD + '">Dose entry for this test</div>' + pjSeg('data-pj-dose-mode', 'Dose entry mode', [
+      { act: 'setPjDoseMode', v: 'target', attrs: ' data-v="target"', aria: 'Type the target mg/L and see the mL to add', label: 'Target mg/L<div style="font-size:12px;font-weight:400;">shows mL to add</div>' },
+      { act: 'setPjDoseMode', v: 'ml', attrs: ' data-v="ml"', aria: 'Type the mL of stock added and see the mg/L', label: 'mL added<div style="font-size:12px;font-weight:400;">shows mg/L</div>' }], ml ? 'ml' : 'target') +
+      (ui.notes && ui.notes.mode ? '<div role="note" class="fa-help" data-pj-mode-note style="margin-top:6px;">' + esc(ui.notes.mode) + '</div>' : '') +
+      pjHelp('mg/L = mL × stock % w/v × 10 000 ÷ jar mL, and mL = mg/L × jar mL ÷ (stock % w/v × 10 000). Doses are nominal mg/L of as-supplied product per initial raw sample.');
+    return mode + d.batches.map(function (b, bi) { return pjBatchHtml(d, b, bi, issues); }).join('') +
+      (ui.notes && ui.notes.batches ? '<div role="note" class="fa-help" style="margin-top:6px;">' + esc(ui.notes.batches) + '</div>' : '') +
+      '<button type="button" data-act="addPjBatch" class="fa-btn" style="margin-top:12px;width:100%;">+ Add batch (copies the previous settings)</button>' + pjMsgs(issues.batches);
+  }
+  function pjSummaryBody(d, issues) {
+    var rows = d.products.map(function (p, i) {
+      var n = i + 1, r = d.summary.rows[p.id] || { optDose: '', optSrc: '', filtNtu: '', colour: '', rating: '' }, sp = 'summary.rows.' + p.id;
+      var jarsOf = [];
+      d.batches.forEach(function (b, bi) { b.jars.forEach(function (j, ji) { if ((p.role === 'polymer' ? j.poly : j.coag) === p.id) { var dd = App.pjJarDose(d, b, j, p.role === 'polymer' ? 'poly' : 'coag'); jarsOf.push({ v: b.id + ':' + ji, label: 'Batch ' + (bi + 1) + ' jar ' + (ji + 1) + (isFinite(dd.mgL) ? ' — ' + App.fmt(dd.mgL, 3) + ' mg/L' : '') }); } }); });
+      // the EXACT decimal product of the dose and price texts, rounded half up to cents (review fix2 N14): the Report and the
+      // Jars cost cells hold that same exact product, so the screen and the exports agree by construction
+      var money = App.pjMoneyText(r.optDose, p.price);
+      var costLine = money !== '\u2014' ? 'Treatment cost: ' + money + ' per ML (' + App.fmt(App.parseNum(r.optDose), 4) + ' mg/L × $' + App.fmt(App.parseNum(p.price), 4) + '/kg; 1 mg/L = 1 kg/ML)' : 'Enter the optimum dose and the product price to see the treatment cost per ML.';
+      return '<div data-pj-summary="' + esc(p.id) + '" style="' + PJ_SUBCARD + 'margin-top:10px;"><div style="font-size:14px;font-weight:700;overflow-wrap:anywhere;">' + esc(p.label) + (p.name ? ' <span style="font-weight:400;color:#56635B;">' + esc(p.name) + '</span>' : '') + '</div>' +
+        // one full-width row per value (the app's existing stacked-rows layout, as at 320-375 px): a 10-significant-digit
+        // dose picked from an mL-mode jar (e.g. 7.142857143) never clips at 390-430 px, where the 140 px grid made two
+        // columns (review fix1 N2). The stored value is not rounded; it feeds the cost.
+        '<div data-pj-summary-rows style="margin-top:8px;display:flex;flex-direction:column;gap:10px;">' + pjField('Optimum dose', sp + '.optDose', r.optDose, 'Product ' + n + ' optimum dose (mg/L)', 'mg/L', { kind: 'dec' }) +
+        '<div>' + pjSelect('…or pick from a jar', '', jarsOf, r.optSrc, 'Product ' + n + ' pick optimum from a jar', '— typed value —', 'pickPjOptimum', ' data-id="' + esc(p.id) + '"') + '</div>' +
+        pjField('Filtered turbidity at that dose', sp + '.filtNtu', r.filtNtu, 'Product ' + n + ' filtered turbidity at that dose (NTU)', 'NTU', { kind: 'dec' }) +
+        pjField('Filtered colour at that dose', sp + '.colour', r.colour, 'Product ' + n + ' colour at that dose (PtCo)', 'PtCo', { kind: 'dec' }) +
+        pjField('Overall rating (1 = best)', sp + '.rating', r.rating, 'Product ' + n + ' overall rating', '', { kind: 'dec' }) + '</div>' +
+        (App.state.pjUi.notes && App.state.pjUi.notes['opt:' + p.id] ? '<div role="note" class="fa-help" data-pj-opt-note style="margin-top:6px;">' + esc(App.state.pjUi.notes['opt:' + p.id]) + '</div>' : '') +
+        '<div data-pj-cost="' + esc(p.id) + '" style="' + PC_HELP + '">' + esc(costLine) + '</div></div>';
+    }).join('');
+    return (d.products.length ? rows : pjHelp('Add products first; each gets an optimum dose, filtered results at that dose, a cost per ML and a rating here.')) +
+      '<div style="margin-top:12px;"><label>Comments <textarea data-actinput="onPj" data-p="summary.comments" data-key="pj:summary.comments" aria-label="Comments" rows="4" style="' + PJ_TEXTAREA + '">' + esc(d.summary.comments) + '</textarea></label></div>' + pjMsgs(issues.summary);
+  }
+  // Export buttons (the Clients backup-pair pattern) and the honest delivery message; `where` is '' for the open test or a saved id.
+  function pjExportBlock(where, title) {
+    var s = App.state, mine = (s.pjExportWhere || '') === where, suffix = where ? ' for saved test ' + title : ' for the open test';
+    var btns = '<div style="display:flex;gap:9px;margin-top:8px;">' +
+      '<button type="button" data-act="exportPj" data-fmt="csv" data-id="' + esc(where) + '" aria-label="Export CSV' + esc(suffix) + '" style="flex:1;' + PJ_OUTLINE + '">Export CSV</button>' +
+      '<button type="button" data-act="exportPj" data-fmt="xlsx" data-id="' + esc(where) + '" aria-label="Export Excel' + esc(suffix) + '" style="flex:1;' + PJ_OUTLINE + '">Export Excel</button></div>';
+    var msg = mine && s.pjExportMsg ? (s.pjExportErr ? '<div role="alert" class="fa-note fa-note-error" data-pj-export-msg style="margin-top:10px;">' + esc(s.pjExportMsg) + '</div>' : '<div role="status" data-pj-export-msg style="margin-top:10px;font-size:12px;color:#17564C;font-weight:600;">' + esc(s.pjExportMsg) + '</div>') : '';
+    var text = mine && s.pjExportText ? '<textarea readonly data-pj-export-text data-key="pj:exportText" aria-label="Export text, select all and copy" style="margin-top:9px;width:100%;height:110px;border:1px solid #D8D2C4;border-radius:10px;padding:9px;font-family:ui-monospace, SFMono-Regular, Consolas, monospace;font-size:12px;background:#FBF9F4;color:#16211F;">' + esc(s.pjExportText) + '</textarea>' +
+      '<button type="button" data-act="dismissPjExportText" class="fa-btn" style="margin-top:6px;width:100%;">Hide text</button>' : '';
+    return btns + msg + text;
+  }
+  function pjSavedBody(d, v, historyHtml, historyDetail) {
+    var s = App.state, filter = s.jarHistoryClientId;
+    var list = s.jarTestsV2.filter(function (t) { return !filter || t.clientId === filter; });
+    function txt(x) { return typeof x === 'string' ? x : (typeof x === 'number' ? String(x) : ''); }
+    var rows = list.map(function (t) {
+      var site = t.site && typeof t.site === 'object' ? t.site : {}, batches = Array.isArray(t.batches) ? t.batches : [], prods = Array.isArray(t.products) ? t.products : [];
+      var title = txt(site.name) || txt(t.clientName) || 'Untitled test', when = txt(site.date) || (txt(t.updatedAt) ? txt(t.updatedAt).slice(0, 10) : 'date unknown');
+      var open = typeof t.id === 'string' && t.id.trim() ? t.id : '';
+      return '<div data-pj-saved="' + esc(open) + '" style="background:#FFF;border:1px solid #E2DDD0;border-radius:14px;padding:13px 14px;margin-top:9px;">' +
+        '<div style="display:flex;justify-content:space-between;align-items:flex-start;"><div style="flex:1;min-width:0;"><div style="font-size:14px;font-weight:700;overflow-wrap:anywhere;">' + esc(title) + (open && s.pj.id === open ? ' <span style="font-weight:400;color:#087568;">(open)</span>' : '') + '</div><div style="font-size:12px;color:#56635B;margin-top:1px;overflow-wrap:anywhere;">' + esc((txt(t.clientName) && txt(t.clientName) !== title ? t.clientName + ' · ' : '') + when + ' · ' + batches.length + ' batch' + (batches.length === 1 ? '' : 'es') + ' · ' + prods.length + ' product' + (prods.length === 1 ? '' : 's')) + '</div></div>' +
+        '<button type="button" data-act="deletePjTest" data-id="' + esc(open) + '" aria-label="Delete saved test ' + esc(title) + '" style="border:none;background:none;cursor:pointer;min-width:44px;min-height:44px;flex-shrink:0;padding:10px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C0574A" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button></div>' +
+        '<button type="button" data-act="openPjTest" data-id="' + esc(open) + '" aria-label="Open saved test ' + esc(title) + ' to continue" class="fa-btn" style="margin-top:8px;">Open to continue</button>' + pjExportBlock(open, title) + '</div>';
+    }).join('');
+    return (filter ? '<button type="button" data-act="showAllJarTests" class="fa-btn" style="width:100%;">Show all saved jar tests</button>' : '') +
+      (list.length ? rows : pjHelp('No saved multi-product tests' + (filter ? ' for this client' : '') + ' yet. Use Save progress above.')) +
+      (v.hasJarTests ? '<div style="font-size:14px;font-weight:700;margin-top:18px;">Earlier single-product tests (read only)</div>' + historyHtml + historyDetail : '');
+  }
+  function pjIssueMap(d) {
+    var m = { site: [], baseline: [], plant: [], products: [], batches: [], summary: [] };
+    App.pjIssues(d).forEach(function (i) { (m[i.sec] || m.batches).push(i.text); });
+    m.baseline = m.baseline.concat(m.plant);
+    return m;
+  }
+  function pjBody(v, historyHtml, historyDetail) {
+    var s = App.state, d = s.pj, ui = s.pjUi, issues = pjIssueMap(d), all = App.pjIssues(d);
+    var entered = 0; App.PJ_BASE_COLS.forEach(function (c) { App.PJ_BASE_ROWS.forEach(function (r) { if (String(d.base.cols[c.k].v[r.k]).trim()) entered++; }); });
+    var usedJars = 0, totalJars = 0; d.batches.forEach(function (b) { b.jars.forEach(function (j) { totalJars++; if (App.pjJarUsed(d, b, j)) usedJars++; }); });
+    var saved = d.id ? App.pjRecordMatches(d.id)[0] : null, draftNote = App.pjDraftNoteText();
+    var status = '<div data-pj-status style="margin-top:12px;' + PC_CARD + '"><div style="font-size:16px;font-weight:700;">' + (saved ? 'Editing a saved test' : 'New test, not saved yet') + '</div>' +
+      '<div style="' + PC_HELP + '">' + (saved && typeof saved.updatedAt === 'string' ? 'Last saved ' + esc(new Date(saved.updatedAt).toLocaleString('en-AU')) + '. ' : '') + 'Save progress as you go: it updates this same test, and a saved test can be reopened from the list at the bottom.</div>' +
+      '<button type="button" data-act="savePj" style="margin-top:12px;' + PJ_PRIMARY + '">Save progress</button>' +
+      // the helper promises autosave only while it works; the note adds the paused sentence while saved data is protected (review fix3 L2)
+      '<div data-pj-autosave-help style="' + PC_HELP + '">' + (App.pjAutosaveOn() ? 'Entries are kept on this phone as you type. ' : '') + 'Save progress adds the test to Saved tests.</div>' +
+      (draftNote ? '<div role="status" class="fa-note" data-pj-draft-note style="margin-top:10px;">' + esc(draftNote) + '</div>' : '') +
+      (s.pjSaved ? '<div role="status" data-pj-saved-note style="margin-top:10px;background:#ECF7F3;border:1px solid #B8E0D3;border-radius:12px;padding:11px 13px;font-size:12px;color:#17564C;font-weight:600;">\u2713 Saved' + (saved && typeof saved.updatedAt === 'string' ? ' ' + esc(new Date(saved.updatedAt).toLocaleTimeString('en-AU')) : '') + '. ' + esc(s.pjMsg || '') + '</div>' : (s.pjMsg ? '<div role="status" class="fa-note" style="margin-top:10px;">' + esc(s.pjMsg) + '</div>' : '')) +
+      (s.pjError ? '<div role="alert" class="fa-note fa-note-error" data-pj-error style="margin-top:10px;">' + esc(s.pjError) + '</div>' : '') +
+      (all.length ? '<div role="status" class="fa-note" data-pj-issue-count style="margin-top:10px;">' + all.length + ' entr' + (all.length === 1 ? 'y needs' : 'ies need') + ' fixing before export (shown in red in its section).</div>' : '') +
+      '<div data-pj-export style="margin-top:14px;"><div style="font-size:14px;font-weight:700;">Export this test</div><div style="' + PC_HELP + '">CSV: one row per used jar, plus a baseline file. Excel: a Report laid out like the lab report, with the Jars and Baseline sheets. Fix any red entries first.</div>' + pjExportBlock('', '') + '</div>' +
+      '<button type="button" data-act="newPjTest" class="fa-btn" style="margin-top:10px;width:100%;">Start a new test</button></div>';
+    return '<div data-pj style="margin-top:12px;"><div style="font-size:14px;color:#56635B;">Record the plant baseline, test several products in batches of 4 or 6 jars (optionally a coagulant plus a polymer in each jar), enter the results, then save it to continue later. Nothing is assumed: stock strengths, volumes and units start empty.</div>' + status +
+      pjSection('site', 'Site and sampling', (d.site.name.trim() || 'No site name yet') + (d.site.date ? ' · ' + d.site.date : ''), pjSiteBody(d, issues)) +
+      pjSection('baseline', 'Baseline: plant and raw water', entered + ' reading' + (entered === 1 ? '' : 's') + ' entered', pjBaselineBody(d, issues)) +
+      pjSection('params', 'Parameters tested', App.PJ_PARAMS.filter(function (p) { return d.params[p.k]; }).length + ' of ' + App.PJ_PARAMS.length + ' switched on', pjParamsBody(d)) +
+      pjSection('products', 'Products in this test', d.products.length + ' product' + (d.products.length === 1 ? '' : 's') + (d.aid.name.trim() ? ' + aid for all jars' : ''), pjProductsBody(d, issues)) +
+      pjSection('batches', 'Batches and jars', d.batches.length + ' batch' + (d.batches.length === 1 ? '' : 'es') + ' · ' + usedJars + ' of ' + totalJars + ' jars used · ' + (d.doseMode === 'ml' ? 'mL added' : 'target mg/L'), pjBatchesBody(d, issues)) +
+      pjSection('summary', 'Summary and comments', d.products.length + ' product' + (d.products.length === 1 ? '' : 's'), pjSummaryBody(d, issues)) +
+      pjSection('saved', 'Saved tests', s.jarTestsV2.length + ' multi-product · ' + s.jarTests.length + ' single-product (read only)', pjSavedBody(d, v, historyHtml, historyDetail)) + '</div>';
   }
 
   // ============================ CALCULATOR mode 2: water treatment dose (mg/L) ==================

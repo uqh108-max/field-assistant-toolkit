@@ -54,6 +54,15 @@
       #fa-nav { display:grid !important; grid-template-columns:repeat(4, minmax(0, 1fr)); padding-top:4px !important; padding-bottom:calc(4px + env(safe-area-inset-bottom)) !important; }
       #fa-nav button { padding:2px !important; }
     }
+    /* Jar Test multi-product: below about 350px a 7-character baseline value (1234.56, 12345.6) needs the side padding
+       and gaps of its three-across grid trimmed, and the section cards give full-width text rows 10px more room. */
+    @media (max-width: 349.98px) {
+      #fa-screen [data-pj-base-box] { padding-left:3px !important; padding-right:3px !important; }
+      #fa-screen [data-pj-base-grid] { gap:3px !important; }
+      #fa-screen [data-pj-base-grid] input { padding-left:3px !important; padding-right:3px !important; }
+      #fa-screen [data-pj-section] { padding-left:10px !important; padding-right:10px !important; }
+      #fa-screen [data-pj-section] input:not([inputmode]) { padding-left:8px !important; padding-right:8px !important; }
+    }
     #fa-screen label { display:block; font-size:12px; font-weight:700; color:#4B564F; }
     #fa-screen .fa-dark-form label { color:#9FB0AA; }
     #fa-screen label > select, #fa-screen label > .fa-select-field, #fa-screen label > input { margin-top:5px; }
